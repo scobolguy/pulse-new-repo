@@ -5,25 +5,29 @@ import { scalarConversion, convertScalarConstant } from './scalar-conversions.mj
 import { isInteger, fitsInteger, implicitConversion, integerResult, widensInteger } from './integer-types.mjs';
 
 const copy = state => ({
-  assigned: new Set(state.assigned), possiblyAssigned: new Set(state.possiblyAssigned), reachable: state.reachable
+  assigned: new Set(state.assigned), possiblyAssigned: new Set(state.possiblyAssigned),
+  nonNull: new Set(state.nonNull), reachable: state.reachable
 });
 function merge(states) {
   const live = states.filter(state => state.reachable);
   return {
     reachable: live.length > 0,
     assigned: new Set(live.length ? [...live[0].assigned].filter(slot => live.every(state => state.assigned.has(slot))) : []),
-    possiblyAssigned: new Set(live.flatMap(state => [...state.possiblyAssigned]))
+    possiblyAssigned: new Set(live.flatMap(state => [...state.possiblyAssigned])),
+    nonNull: new Set(live.length ? [...live[0].nonNull].filter(slot => live.every(state => state.nonNull.has(slot))) : [])
   };
 }
 function update(state, next) {
   state.assigned = next.assigned;
   state.possiblyAssigned = next.possiblyAssigned;
+  state.nonNull = next.nonNull;
   state.reachable = next.reachable;
 }
 const hasConstant = node => Object.hasOwn(node, 'constant');
 
 export function analyze(program, { imports = [], checkedArithmetic = false, service = null } = {}) {
   const methods = new Map(), groups = new Map(), classes = new Set();
+  const classNames = new Set(program.classes.map(owner => owner.name));
   const groupKey = (name, token) => token.sourceLanguage === 'vbish' ? name.toLowerCase() : name;
   function register(method) {
     method.signature = methodSignature(method);
@@ -78,7 +82,7 @@ export function analyze(program, { imports = [], checkedArithmetic = false, serv
       parameters.add(token.value);
     }
     const validateType = (type, allowVoid = false) => {
-      if (!VALUE_TYPES.has(type.name) && !parameters.has(type.name) && !(allowVoid && type.name === 'void'))
+      if (!VALUE_TYPES.has(type.name) && !classNames.has(type.name) && !parameters.has(type.name) && !(allowVoid && type.name === 'void'))
         fail(type, `Unsupported or unknown type '${type.name}'`);
       return type.name;
     };
@@ -88,11 +92,11 @@ export function analyze(program, { imports = [], checkedArithmetic = false, serv
     const scopes = [], loops = [], declarationLoopDepth = new WeakMap();
     method.locals = [];
     function pushScope() { scopes.push({ names: new Map(), descendants: new Set() }); }
-    function declare(token, type, isParameter = false) {
+    function declare(token, type, isParameter = false, nullable = false) {
       if (parameters.has(token.value)) fail(token, 'A local or parameter cannot hide a type parameter');
       if (scopes.some(scope => scope.names.has(token.value)) || scopes.at(-1).descendants.has(token.value))
         fail(token, `Duplicate or shadowed local '${token.value}'`);
-      const variable = { name: token.value, type, slot: `CS_V${serial++}` };
+      const variable = { name: token.value, type, nullable, slot: `CS_V${serial++}` };
       declarationLoopDepth.set(variable, loops.length);
       scopes.at(-1).names.set(token.value, variable);
       for (const scope of scopes.slice(0, -1)) scope.descendants.add(token.value);
@@ -106,12 +110,25 @@ export function analyze(program, { imports = [], checkedArithmetic = false, serv
       if (read && state.reachable && !state.assigned.has(variable.slot)) fail(node.token, `Use of unassigned local '${node.name}'`);
       node.variable = variable;
       node.valueType = variable.type;
+      node.nullable = variable.nullable === true && !state.nonNull.has(variable.slot);
       return variable;
     }
     const requireType = (actual, expected, token) => {
       if (actual !== expected) fail(token, `Cannot use '${actual}' where '${expected}' is required`);
     };
-    function coerce(node, expected) {
+    function coerce(node, expected, allowNull = false) {
+      if (node.valueType === 'nothing') {
+        node.valueType = expected;
+        return node;
+      }
+      if (node.valueType === 'null' && allowNull) {
+        node.valueType = expected;
+        return node;
+      }
+      if (node.valueType === 'null' && (!VALUE_TYPES.has(expected) || classNames.has(expected) || parameters.has(expected))) {
+        node.valueType = expected;
+        return node;
+      }
       if (!implicitConversion(node.valueType, expected, node, method.token.sourceLanguage))
         fail(node.token, `Cannot use '${node.valueType}' where '${expected}' is required`);
       if (node.valueType === expected) return node;
@@ -127,6 +144,17 @@ export function analyze(program, { imports = [], checkedArithmetic = false, serv
     }
     function binary(node, left, right, unchecked) {
       const { op, token } = node;
+      if (op === '..' || op === '..<') {
+        requireType(left, 'int', token);
+        requireType(right, 'int', token);
+        return 'void';
+      }
+      if (op === '?:') {
+        if (left === 'null') return right;
+        if (right === 'null') return left;
+        requireType(right, left, token);
+        return left;
+      }
       if (['and', 'or', 'xor'].includes(op)) {
         requireType(left, 'bool', token); requireType(right, 'bool', token);
         return 'bool';
@@ -140,6 +168,16 @@ export function analyze(program, { imports = [], checkedArithmetic = false, serv
         return 'bool';
       }
       if (['==', '!='].includes(op)) {
+        if (left === 'null' && right === 'null') {
+          node.constant = op === '==';
+          return 'bool';
+        }
+        if (right === 'null' && node.left.nullable || left === 'null' && node.right.nullable)
+          return 'bool';
+        if (node.left.nullable || node.right.nullable)
+          fail(token, 'Nullable value requires a null check before comparison');
+        if (right === 'null' && (classNames.has(left) || parameters.has(left)) ||
+            left === 'null' && (classNames.has(right) || parameters.has(right))) return 'bool';
         if (isInteger(left) && isInteger(right)) {
           if (method.token.sourceLanguage === 'kotlin' && left !== right)
             fail(token, `Kotlin equality requires matching integer types, found '${left}' and '${right}'`);
@@ -151,6 +189,8 @@ export function analyze(program, { imports = [], checkedArithmetic = false, serv
           node.constant = op === '==' ? node.left.constant === node.right.constant : node.left.constant !== node.right.constant;
         return 'bool';
       }
+      if (node.left.nullable || node.right.nullable)
+        fail(token, 'Nullable value requires a null check before operation');
       if (op === '+' && (left === 'string' || right === 'string')) {
         if (token.sourceLanguage === 'vbish' && left !== right) fail(token, 'Mixed String/numeric addition is not supported; use & for concatenation');
         if (token.sourceLanguage === 'kotlin' && parameters.has(left) && right === 'string')
@@ -184,7 +224,7 @@ export function analyze(program, { imports = [], checkedArithmetic = false, serv
       return result;
     }
     function expression(node, state, mode = overflowMode) {
-      const unchecked = mode === false;
+      const unchecked = mode === false || method.token.sourceLanguage === 'kotlin' && mode !== true;
       node.checkedArithmetic = mode ?? checkedArithmetic;
       let type;
       switch (node.kind) {
@@ -196,10 +236,84 @@ export function analyze(program, { imports = [], checkedArithmetic = false, serv
             node.constant = Number(value);
           } else node.constant = node.value;
           break;
+        case 'object-value':
+          type = node.typeName;
+          node.constant = 1;
+          break;
+        case 'field-get':
+          if (!method.instance) fail(node.token, 'Instance field access requires an instance method');
+          type = node.type;
+          break;
+        case 'field-set':
+          if (!method.instance) fail(node.token, 'Instance field access requires an instance method');
+          expression(node.value, state, mode);
+          node.value = coerce(node.value, node.type);
+          type = 'void';
+          break;
+        case 'array-new':
+          requireType(expression(node.length, state, mode), 'int', node.token);
+          type = node.arrayType;
+          break;
+        case 'index-get':
+          const arrayType = expression(node.receiver, state, mode);
+          if (!arrayType?.endsWith('-array'))
+            fail(node.token, 'Property access, indexing, and null assertions are not supported by the P-code subset');
+          requireType(expression(node.index, state, mode), 'int', node.token);
+          type = arrayType === 'bool-array' ? 'bool' : arrayType === 'byte-array' ? 'sbyte'
+            : arrayType === 'short-array' ? 'short' : 'int';
+          break;
+        case 'property': {
+          const receiverType = expression(node.receiver, state, mode);
+          if (receiverType === 'int-array' && node.name === 'size') {
+            node.arraySize = true;
+            type = 'int';
+            break;
+          }
+          if (!classNames.has(receiverType)) fail(node.token, `${node.name} requires a function call`);
+          const getterName = `${receiverType}.get${node.name[0].toUpperCase()}${node.name.slice(1)}`;
+          const group = groups.get(groupKey(getterName, method.token));
+          if (!group || !group.some(candidate => candidate.instance))
+            fail(node.token, `Property '${node.name}' is not available on '${receiverType}'`);
+          const selected = resolveMethod(group, { ...node, name: getterName, args: [] },
+            [receiverType], [], method);
+          node.method = selected.method;
+          node.genericTypes = selected.genericTypes;
+          node.valueType = selected.returnType;
+          node.nullable = node.safe || selected.returnNullable;
+          type = selected.returnType;
+          break;
+        }
         case 'name': type = lookup(node, state).type; break;
+        case 'string-length':
+          requireType(expression(node.value, state, mode), 'string', node.token);
+          if (node.value.nullable) fail(node.token, 'Nullable string requires a non-null assertion before length access');
+          type = 'int';
+          break;
+        case 'scalar-string': {
+          const sourceType = expression(node.value, state, mode);
+          if (!VALUE_TYPES.has(sourceType) && !(method.token.sourceLanguage === 'kotlin' && parameters.has(sourceType)))
+            fail(node.token, 'String conversion requires a scalar value');
+          type = 'string';
+          break;
+        }
+        case 'range-test':
+          for (const operand of [node.start, node.end, node.value])
+            requireType(expression(operand, state, mode), 'int', operand.token);
+          type = 'bool';
+          break;
         case 'overflow':
           type = expression(node.value, state, node.checked);
           if (hasConstant(node.value)) node.constant = node.value.constant;
+          break;
+        case 'not-null':
+          type = expression(node.value, state, mode);
+          if (!node.value.nullable && type !== 'null' && (VALUE_TYPES.has(type) || type === 'void'))
+            fail(node.token, 'Non-null assertion requires a nullable reference');
+          if (type === 'void') fail(node.token, 'A Unit value cannot be null-asserted');
+          break;
+        case 'throw':
+          expression(node.value, state, mode);
+          type = 'nothing';
           break;
         case 'convert':
           node.conversion = scalarConversion(expression(node.value, state, mode), node.targetType, node.token);
@@ -232,7 +346,12 @@ export function analyze(program, { imports = [], checkedArithmetic = false, serv
         }
         case 'binary': {
           const left = expression(node.left, state, mode);
-          if (['&&', '||'].includes(node.op)) {
+          if (node.op === '?:') {
+            const fallback = copy(state);
+            const right = expression(node.right, fallback, mode);
+            type = binary(node, left, right, unchecked);
+            update(state, hasConstant(node.left) && node.left.valueType === 'null' ? fallback : merge([state, fallback]));
+          } else if (['&&', '||'].includes(node.op)) {
             const before = copy(state), after = copy(state);
             const right = expression(node.right, after, mode);
             type = binary(node, left, right, unchecked);
@@ -244,6 +363,28 @@ export function analyze(program, { imports = [], checkedArithmetic = false, serv
           break;
         }
         case 'assign': {
+          if (node.left.kind === 'index-get') {
+            const arrayType = expression(node.left.receiver, state, mode);
+            if (!arrayType?.endsWith('-array'))
+              fail(node.token, 'Property access, indexing, and null assertions are not supported by the P-code subset');
+            requireType(expression(node.left.index, state, mode), 'int', node.token);
+            const elementType = arrayType === 'bool-array' ? 'bool' : arrayType === 'byte-array' ? 'sbyte'
+              : arrayType === 'short-array' ? 'short' : 'int';
+            const right = expression(node.right, state, mode);
+            if (node.op !== '=') {
+              const operation = { ...node, op: node.op[0], left: { kind: 'index-get', token: node.left.token,
+                receiver: node.left.receiver, index: node.left.index, valueType: elementType } };
+              type = binary(operation, elementType, right, node.checkedArithmetic);
+              node.operationType = operation.operationType;
+              if (isInteger(type) && isInteger(elementType)) node.assignmentConversion = elementType;
+            } else type = right;
+            if (type !== elementType && !(isInteger(type) && isInteger(elementType)))
+              requireType(type, elementType, node.token);
+            type = elementType;
+            node.left.valueType = elementType;
+            node.right = coerce(node.right, elementType);
+            break;
+          }
           const variable = lookup(node.left, state, node.op !== '=');
           if (method.token.sourceLanguage === 'kotlin' && variable.mutable === false
               && (state.possiblyAssigned.has(variable.slot) || loops.length > declarationLoopDepth.get(variable)))
@@ -257,11 +398,16 @@ export function analyze(program, { imports = [], checkedArithmetic = false, serv
             if (isInteger(type) && isInteger(variable.type)) node.assignmentConversion = variable.type;
             else requireType(type, variable.type, node.token);
           } else {
-            node.right = coerce(node.right, variable.type);
+            node.right = coerce(node.right, variable.type, variable.nullable);
             type = variable.type;
           }
           state.assigned.add(variable.slot);
           state.possiblyAssigned.add(variable.slot);
+          if (variable.nullable) {
+            if (node.right.valueType === 'null') state.nonNull.delete(variable.slot);
+            else if (!node.right.nullable) state.nonNull.add(variable.slot);
+            else state.nonNull.delete(variable.slot);
+          }
           type = variable.type;
           break;
         }
@@ -286,12 +432,20 @@ export function analyze(program, { imports = [], checkedArithmetic = false, serv
             if (yesToNo) type = noType;
             node.yes = coerce(node.yes, type);
             node.no = coerce(node.no, type);
-          } else requireType(noType, type, node.token);
-          if (type === 'void') fail(node.token, 'Conditional operands must have a value');
+          } else if (type === 'nothing') type = noType;
+          else if (noType !== 'nothing') requireType(noType, type, node.token);
+          if (type === 'void' || type === 'nothing') fail(node.token, 'Conditional operands must have a value');
           update(state, hasConstant(node.condition) ? node.condition.constant ? yes : no : merge([yes, no]));
           break;
         }
         case 'call': {
+          let receiverType = null;
+          if (node.receiver) {
+            receiverType = expression(node.receiver, state, mode);
+            if (!classNames.has(receiverType))
+              fail(node.token, `Receiver type '${receiverType}' has no stateless method dispatch`);
+            node.name = `${receiverType}.${node.name}`;
+          }
           const consoleName = resolveConsoleMember(node.name, program.usingSystem);
           if (consoleName) {
             const allowed = consoleName.endsWith('WriteLine') ? [0, 1] : [1];
@@ -306,13 +460,23 @@ export function analyze(program, { imports = [], checkedArithmetic = false, serv
           const group = groups.get(groupKey(node.name.includes('.') ? node.name : `${method.owner}.${node.name}`, method.token))
             || groups.get(groupKey(`${method.owner.slice(0, method.owner.lastIndexOf('.') + 1)}${node.name}`, method.token));
           if (!group) fail(node.token, `Unknown static method '${node.name}'`);
-          const argumentTypes = node.args.map(arg => expression(arg, state, mode));
+          const instanceDispatch = Boolean(node.receiver && group.some(candidate => candidate.instance));
+          const argumentTypes = [
+            ...(instanceDispatch ? [receiverType] : []),
+            ...node.args.map(arg => expression(arg, state, mode))
+          ];
           if (argumentTypes.includes('void')) fail(node.token, 'A void invocation cannot be used as an argument');
           const selected = resolveMethod(group, node, argumentTypes, node.typeArgs.map(arg => validateType(arg)), method);
           node.genericTypes = selected.genericTypes;
           node.method = selected.method;
-          node.args = node.args.map((arg, index) => coerce(arg, selected.parameterTypes[index]));
+          // With instance dispatch, parameterTypes[0] belongs to the receiver,
+          // which is not part of node.args.
+          const parameterOffset = instanceDispatch ? 1 : 0;
+          node.args = node.args.map((arg, index) =>
+            coerce(arg, selected.parameterTypes[index + parameterOffset], selected.parameterNullable[index + parameterOffset]));
           type = selected.returnType;
+          node.nullable = selected.returnNullable;
+          if (node.safe && type !== 'void') node.nullable = true;
           break;
         }
         default: fail(node.token, `Unsupported expression ${node.kind}`);
@@ -356,12 +520,12 @@ export function analyze(program, { imports = [], checkedArithmetic = false, serv
               type = expression(item.value, state);
               if (type === 'void') fail(item.token, 'Cannot infer a local variable type from a Unit expression');
             }
-            item.variable = declare(item.token, type);
+            item.variable = declare(item.token, type, false, node.type?.nullable === true);
             item.variable.mutable = item.mutable !== false;
             if (item.value) {
               if (!node.infer) {
                 expression(item.value, state);
-                item.value = coerce(item.value, type);
+                item.value = coerce(item.value, type, node.type?.nullable === true);
               }
               state.assigned.add(item.variable.slot);
               state.possiblyAssigned.add(item.variable.slot);
@@ -369,19 +533,55 @@ export function analyze(program, { imports = [], checkedArithmetic = false, serv
           }
           break;
         }
-        case 'expressions': node.values.forEach(value => statementExpression(value, state)); break;
+        case 'expressions':
+          node.values.forEach(value => {
+            statementExpression(value, state);
+            if (value.kind === 'throw') state.reachable = false;
+          });
+          break;
+        case 'try': {
+          const protectedState = copy(state);
+          statement(node.body, protectedState);
+          const branches = [protectedState];
+          for (const handler of node.catches) {
+            const handlerState = copy(state);
+            statement(handler.body, handlerState);
+            branches.push(handlerState);
+          }
+          if (node.finallyBody) statement(node.finallyBody, protectedState);
+          update(state, merge(branches));
+          break;
+        }
         case 'return':
+          if (node.value?.kind === 'throw') {
+            expression(node.value, state);
+            state.reachable = false;
+            break;
+          }
           if (method.returnType.name === 'void' && node.value) fail(node.token, 'A void method cannot return a value');
           if (method.returnType.name !== 'void' && !node.value) fail(node.token, 'A value is required by this return statement');
           if (node.value) {
             expression(node.value, state);
-            node.value = coerce(node.value, method.returnType.name);
+            node.value = coerce(node.value, method.returnType.name, method.returnType.nullable === true);
           }
           state.reachable = false;
           break;
         case 'if': {
           requireType(expression(node.condition, state), 'bool', node.condition.token);
           const yes = copy(state), no = copy(state);
+          const condition = node.condition;
+          if (condition.kind === 'binary' && ['==', '!='].includes(condition.op)) {
+            const reference = condition.left.kind === 'name' && condition.right.valueType === 'null'
+              ? condition.left : condition.right.kind === 'name' && condition.left.valueType === 'null'
+                ? condition.right : null;
+            if (reference?.variable?.nullable) {
+              const nonNullOnYes = condition.op === '!=';
+              const yesState = nonNullOnYes ? yes : no;
+              const nullState = nonNullOnYes ? no : yes;
+              yesState.nonNull.add(reference.variable.slot);
+              nullState.nonNull.delete(reference.variable.slot);
+            }
+          }
           if (hasConstant(node.condition)) {
             yes.reachable &&= node.condition.constant;
             no.reachable &&= !node.condition.constant;
@@ -419,14 +619,18 @@ export function analyze(program, { imports = [], checkedArithmetic = false, serv
       }
     }
     pushScope();
-    const state = { assigned: new Set(), possiblyAssigned: new Set(), reachable: true };
+    const state = { assigned: new Set(), possiblyAssigned: new Set(), nonNull: new Set(), reachable: true };
     for (const param of method.params) {
-      param.variable = declare(param.token, param.type.name, true);
+      param.variable = declare(param.token, param.type.name, true, param.type.nullable === true);
       if (method.token.sourceLanguage === 'kotlin') param.variable.mutable = false;
       state.assigned.add(param.variable.slot);
       state.possiblyAssigned.add(param.variable.slot);
     }
     statement(method.body, state);
+    for (const field of method.fieldInitializers || []) {
+      expression(field.value, state);
+      field.value = coerce(field.value, field.type);
+    }
     if (state.reachable && method.returnType.name !== 'void') fail(method.token, 'Not all code paths return a value');
   }
   return { methods, entry };

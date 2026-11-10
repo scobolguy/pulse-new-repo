@@ -9,7 +9,9 @@ export function methodSignature(method) {
 
 function bindMethod(method, node, argumentTypes, explicitTypes) {
   const reject = (message, token = node.token) => ({ message, token });
-  if (argumentTypes.length !== method.params.length)
+  const vararg = method.params.at(-1)?.vararg;
+  if ((!vararg && argumentTypes.length !== method.params.length)
+      || (vararg && argumentTypes.length < method.params.length - 1))
     return reject(`Method '${node.name}' requires ${method.params.length} argument(s)`);
   const bindings = new Map();
   if (explicitTypes.length) {
@@ -19,7 +21,8 @@ function bindMethod(method, node, argumentTypes, explicitTypes) {
   } else {
     for (const [index, parameter] of method.params.entries()) {
       if (!method.typeParams.some(token => token.value === parameter.type.name)) continue;
-      const previous = bindings.get(parameter.type.name), actual = argumentTypes[index];
+      const actual = argumentTypes[vararg && index === method.params.length - 1 ? argumentTypes.length - 1 : index];
+      const previous = bindings.get(parameter.type.name);
       if (previous && previous !== actual)
         return reject(`Conflicting inferred types for '${parameter.type.name}'`);
       bindings.set(parameter.type.name, actual);
@@ -32,13 +35,22 @@ function bindMethod(method, node, argumentTypes, explicitTypes) {
     genericTypes.push(type);
   }
   const parameterTypes = [];
+  const parameterNullable = [];
   for (const [index, parameter] of method.params.entries()) {
     const expected = bindings.get(parameter.type.name) || parameter.type.name;
     parameterTypes.push(expected);
-    if (!implicitConversion(argumentTypes[index], expected, node.args[index], node.token.sourceLanguage))
-      return reject(`Cannot use '${argumentTypes[index]}' where '${expected}' is required`, node.args[index].token);
+    parameterNullable.push(parameter.type.nullable === true);
+    const actualIndex = vararg && index === method.params.length - 1 ? argumentTypes.length - 1 : index;
+    const actual = argumentTypes[actualIndex];
+    const nullableReference = actual === 'null' && (parameter.type.nullable === true
+      || !['sbyte', 'byte', 'short', 'ushort', 'int', 'bool', 'string', 'void'].includes(expected));
+    if (!nullableReference
+        && !implicitConversion(actual, expected, node.args[actualIndex], node.token.sourceLanguage))
+      return reject(`Cannot use '${argumentTypes[actualIndex]}' where '${expected}' is required`, node.args[actualIndex].token);
   }
-  return { method, genericTypes, parameterTypes, returnType: bindings.get(method.returnType.name) || method.returnType.name };
+  return { method, genericTypes, parameterTypes, parameterNullable,
+    returnType: bindings.get(method.returnType.name) || method.returnType.name,
+    returnNullable: method.returnType.nullable === true };
 }
 
 function betterMember(left, right, sourceLanguage, argumentTypes) {

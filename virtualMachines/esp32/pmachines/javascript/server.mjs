@@ -5,6 +5,7 @@
 import http from 'node:http';
 import dgram from 'node:dgram';
 import os from 'node:os';
+import v8 from 'node:v8';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { timingSafeEqual, randomUUID } from 'node:crypto';
@@ -421,10 +422,21 @@ export function createJsPmachineNodeServer({
     }
 
     if (route === '/status' && req.method === 'GET') {
+      const schedulerStatus = scheduler?.getStatus() || null;
+      const heap = v8.getHeapStatistics();
       return send(res, 200, {
         nodeName: name,
         runtime: 'js-pmachine',
         role: 'pmachine',
+        resourceCapacity: {
+          status: schedulerStatus ? 'online' : 'degraded',
+          estimatedFreeSlots: schedulerStatus
+            ? Math.min(schedulerStatus.available, schedulerStatus.maxContexts - schedulerStatus.contexts.length)
+            : 0,
+          freeMemoryBytes: Math.max(0, Math.min(
+            1024 * 1024 * 1024, os.freemem(), heap.heap_size_limit - heap.used_heap_size,
+          )),
+        },
         serviceCapabilities: Object.fromEntries(Object.keys(inventoryGrants).map(id => [id, ['inventory.transaction']])),
         services: serviceRegistrations().map(service => service.serviceId),
         port: server.address()?.port ?? port,
@@ -654,7 +666,14 @@ export function createJsPmachineNodeServer({
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   const args = parseCliArgs(process.argv.slice(2));
-  const server = createJsPmachineNodeServer(args);
+  let scheduler = null;
+  const slotsText = process.env.JS_PMACHINE_SCHEDULER_SLOTS;
+  if (slotsText !== undefined && slotsText !== '') {
+    if (!/^[0-9]+$/.test(slotsText) || Number(slotsText) < 1 || Number(slotsText) > 64)
+      throw new Error('JS_PMACHINE_SCHEDULER_SLOTS must be an integer from 1 to 64');
+    scheduler = new PMachineScheduler({ slots: Number(slotsText) });
+  }
+  const server = createJsPmachineNodeServer({ ...args, scheduler });
   server.listen(args.port, args.host, () => {
     console.log(`[js-pmachine] ${args.name} listening on http://${args.host}:${server.address().port}`);
   });

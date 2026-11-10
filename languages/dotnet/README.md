@@ -1,8 +1,9 @@
-# Shared VBish / C# compiler and library contract
+# Shared scalar compiler and library contract
 
 This directory is the common library boundary for Pulse's VBish and C#
 frontends. The name describes their source-language family, not a CLR,
 Microsoft .NET implementation, or Windows DLL format.
+Kotlin also lowers its bounded scalar subset through this backend.
 
 ## Current implementation
 
@@ -29,6 +30,12 @@ Microsoft .NET implementation, or Windows DLL format.
 - C# retains unchecked nonconstant Int32 arithmetic; `vb11` emits checked
   add/subtract/multiply through System intrinsics. These are language semantics,
   not interchangeable defaults. Console formatting and procedure frames are shared.
+- System 0.3.2 adds stateless UTF-16 string length for well-formed Unicode
+  (`system.string.length`) and explicit wrapping divide/remainder bindings
+  (`system.int32.divide.unchecked`, `system.int32.remainder.unchecked`).
+  Kotlin uses these library APIs; C#/VB keep their existing checked division
+  behavior. Native string length validates UTF-8 without allocating a copy.
+  No language-specific PMachine opcodes or concurrency state are required.
 - Legacy VBish's default `pulse` profile retains its original compiler path.
 - C# and VB11 syntax now comes from generated ANTLR parsers, with parse-tree
   lowering in each frontend and a [shared generation helper](generate-parser.mjs).

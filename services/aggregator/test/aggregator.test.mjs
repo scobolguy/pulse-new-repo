@@ -5,7 +5,8 @@ import { LiveRegistry } from '../src/registry.mjs';
 import { createAggregator } from '../src/server.mjs';
 
 const beacon = (overrides = {}) => ({
-  kind: 'nodeBeacon', nodeId: 'esp-a', firmwareBuildStamp: 'Oct 31 2026 23:51:13', available: true, draining: false, httpPort: 80, ...overrides
+  kind: 'nodeBeacon', nodeId: 'esp-a', firmwareBuildStamp: 'Oct 31 2026 23:51:13', available: true, draining: false, httpPort: 80,
+  capabilities: ['pmachine-pcode-v1'], pmachine: { available: true }, ...overrides
 });
 
 test('lists fresh available ESP nodes and expires old ones', () => {
@@ -19,7 +20,7 @@ test('lists fresh available ESP nodes and expires old ones', () => {
 
 test('rejects non-ESP, spoofed, unavailable, draining and non-beacon messages', () => {
   const registry = new LiveRegistry({ ttlMs: 1000 });
-  assert.equal(registry.observe(beacon({ firmwareBuildStamp: undefined }), '10.0.0.5'), null);
+  assert.equal(registry.observe(beacon({ firmwareBuildStamp: undefined, capabilities: [], pmachine: false }), '10.0.0.5'), null);
   assert.equal(registry.observe(beacon({ firmwareBuildStamp: undefined, hardware: 'ESP32' }), '10.0.0.5')?.nodeId, 'esp-a');
   registry.remove('esp-a');
   assert.equal(registry.observe(beacon({ ip: '10.0.0.9' }), '10.0.0.5'), null);
@@ -27,6 +28,16 @@ test('rejects non-ESP, spoofed, unavailable, draining and non-beacon messages', 
   registry.observe(beacon({ nodeId: 'a', available: false }), '10.0.0.6');
   registry.observe(beacon({ nodeId: 'd', draining: true }), '10.0.0.7');
   assert.deepEqual(registry.list(), []);
+});
+
+test('lists non-ESP swarm members that advertise a P-machine', () => {
+  const registry = new LiveRegistry({ ttlMs: 1000 });
+  const node = registry.observe({
+    kind: 'machineAvailability', nodeId: 'native-a', hardware: 'linux',
+    capabilities: ['pmachine-pcode-v1'], available: true, httpPort: 8080
+  }, '10.0.0.8');
+  assert.equal(node.pmachine.protocol, 'pcode-v1');
+  assert.deepEqual(registry.list().map(item => item.nodeId), ['native-a']);
 });
 
 test('API serves live ESP beacons only, drops unreachable nodes, keeps nothing across restarts', async () => {
@@ -51,6 +62,8 @@ test('API serves live ESP beacons only, drops unreachable nodes, keeps nothing a
     return response.json();
   };
   assert.deepEqual((await get()).map(n => n.nodeId), ['esp-a']);
+  const pmachines = await (await fetch(`http://127.0.0.1:${ports.httpPort}/api/pmachines`)).json();
+  assert.deepEqual(pmachines.map(n => n.nodeId), ['esp-a']);
   reachable = false;
   assert.deepEqual(await get(), []);
   await send();

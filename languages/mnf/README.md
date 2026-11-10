@@ -77,7 +77,9 @@ on the serial console (30-second record timeout). Full device-corpus certificati
 pending. Hardware
 unformatted persistence is a distinct versioned format, not interchangeable with
 the JS file envelope. See the [firmware RTL status](../../virtualMachines/esp32/pmachines/arduino/README.md#fortran-runtime-port-status).
-ESP32 double-precision accuracy certification is not required for this port.
+ESP32 double-precision accuracy certification is not required for this port,
+although a physical ESP32-S3 has passed the device parity suite and a targeted
+binary64 probe (see the firmware RTL status for scope and limits).
 
 Passing the supplied corpus is **not a claim of full FORTRAN 77 conformance**.
 Integers remain signed 32-bit, storage and execution have p-machine limits,

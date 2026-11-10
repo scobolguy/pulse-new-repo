@@ -51,6 +51,10 @@ native F5 requires the hosted-service artifact/map described below.
 Kotlin hosted services require a service host and are rejected by the generic
 Run/Debug commands. Kotlin supports a limited language subset, not full Kotlin;
 see the [Kotlin compiler guide](../../../../languages/kotlin/README.md).
+The bundled compiler supports scalar standard-library conversions, string templates
+and UTF-16 length, trailing positional defaults and bounded integer ranges.
+Length and wrapping division require the corresponding System library on ESP32;
+these library calls remain unavailable in hosted services.
 The [Kotlin demo](../../../../languages/kotlin/examples/pulse-demo.kt) can be
 opened in the editor and run on the local JavaScript PMachine.
 
@@ -110,7 +114,7 @@ npm run test:package
 
 The package command builds TypeScript, copies the Studio assets and compiler/runtime
 dependency closure, includes production npm dependencies, and creates
-`pulse-pmachine-debugger-0.1.24.vsix`. In VS Code, run
+`pulse-pmachine-debugger-0.1.25.vsix`. In VS Code, run
 **Extensions: Install from VSIX...**, select that file, then
 **Developer: Reload Window**. Packaging does not publish or install it.
 

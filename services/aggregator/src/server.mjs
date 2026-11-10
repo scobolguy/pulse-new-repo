@@ -54,6 +54,10 @@ export function createAggregator({
     const url = new URL(req.url, 'http://localhost');
     if (req.method !== 'GET') return send(res, 405, { error: 'Method not allowed' });
     if (url.pathname === '/api/nodes') return send(res, 200, await activeNodes());
+    if (url.pathname === '/api/pmachines') {
+      const nodes = await activeNodes();
+      return send(res, 200, nodes.filter(node => node.pmachine?.available === true));
+    }
     if (url.pathname === '/api/health') return send(res, 200, { status: 'ok', ttlMs, probe });
     return send(res, 404, { error: 'Not found' });
   }

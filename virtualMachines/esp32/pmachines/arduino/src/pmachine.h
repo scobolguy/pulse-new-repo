@@ -73,6 +73,7 @@ enum Opcode : uint8_t {
     OP_JZ  = 0x08,      // JZ  0, a: Jump if zero
     OP_PUSH_INT = 0x09, // Push integer operand
     OP_PUSH_STR = 0x0A, // Push string operand
+    OP_PUSH_NULL = 0x6C, // Push a null reference
     OP_PUSH_ENUM = 0x0B,// Push enum operand
     OP_ADD = 0x0C,      // Add
     OP_SUB = 0x0D,      // Subtract
@@ -287,6 +288,7 @@ struct ExtendableStorageDiagnostics {
         if (mnemonic == "ARR_GET") return OP_ARR_GET;
         if (mnemonic == "ARR_SET") return OP_ARR_SET;
         if (mnemonic == "PUSH_STR") return OP_PUSH_STR;
+        if (mnemonic == "PUSH_NULL") return OP_PUSH_NULL;
         if (mnemonic == "PUSH_ENUM") return OP_PUSH_ENUM;
         if (mnemonic == "ADD") return OP_ADD;
         if (mnemonic == "SUB") return OP_SUB;

@@ -1,11 +1,28 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ManagedObjects, ObjectRef } from '../../pmachines/javascript/src/managed-objects.mjs';
+import { PMACHINE_ABI, validatePmachineAbi } from '../../pmachines/shared/p-machine-abi.mjs';
+import { REFERENCE_ABI, validateReferenceHandle, validateReferenceKind } from '../../pmachines/shared/reference-abi.mjs';
 import { PMachineMemory, managedStorage } from '../../pmachines/javascript/src/memory.mjs';
 import { executeProgram, parsePcode } from '../../pmachines/javascript/src/runtime.mjs';
 
 const run = (pcode, programMap = {}, runtimeContext = {}) => executeProgram({
   instructions: parsePcode(pcode), opcodeMap: new Map(), programMap, runtimeContext, debugLogger() {},
+});
+
+test('tagged reference ABI keeps null, kinds, and handles distinct', () => {
+  validatePmachineAbi(PMACHINE_ABI);
+  assert.throws(() => validatePmachineAbi({ ...PMACHINE_ABI, referenceAbiVersion: 2 }), /Unsupported reference ABI/);
+  assert.equal(REFERENCE_ABI.nullHandle, 0);
+  assert.deepEqual(REFERENCE_ABI.kinds, ['object', 'array', 'callable']);
+  assert.equal(validateReferenceKind('object'), 'object');
+  assert.equal(validateReferenceHandle(0), 0);
+  assert.equal(validateReferenceHandle(0xffff), 0xffff);
+  assert.throws(() => validateReferenceKind('scalar'), /Unsupported reference kind/);
+  assert.throws(() => validateReferenceHandle(0x10000), /outside the ABI range/);
+  const heap = new ManagedObjects();
+  const arrayRef = new ObjectRef('array');
+  assert.throws(() => heap.get(arrayRef, 0), /object reference required, got array/);
 });
 
 test('object roots and owned edges are counted and reclaimed transitively', () => {

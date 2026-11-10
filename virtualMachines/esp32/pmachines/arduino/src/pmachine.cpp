@@ -1825,6 +1825,7 @@ void PMachine::runInstructions(size_t instructionCount,
         return nullptr;
     };
     auto referenceTarget = [&](Value reference) -> Value* {
+        if (reference.isNull()) return nullptr;
         const auto* entry = references->get(reference);
         if (!entry) pmachine::rtl::detail::fail("invalid variable reference handle");
         if (frameIdentity(entry->frame) != entry->identity)
@@ -1835,7 +1836,7 @@ void PMachine::runInstructions(size_t instructionCount,
     };
     std::function<Value(Value, size_t)> dereference;
     dereference = [&](Value value, size_t depth) -> Value {
-        if (!value.isReference()) return value;
+        if (!value.isReference() || value.isNull()) return value;
         if (depth >= ManagedReferences::CAPACITY) pmachine::rtl::detail::fail("P-code reference chain is too deep");
         const auto* entry = references->get(value);
         const Value target = dereference(*referenceTarget(value), depth + 1);
@@ -1853,7 +1854,7 @@ void PMachine::runInstructions(size_t instructionCount,
         const auto* entry = references->get(reference);
         Value* target = referenceTarget(reference);
         if (entry->offset < 0) {
-            if (target->isReference()) assignReference(*target, value, depth + 1);
+            if (target->isReference() && !target->isNull()) assignReference(*target, value, depth + 1);
             else *target = value;
             return;
         }
@@ -1871,7 +1872,7 @@ void PMachine::runInstructions(size_t instructionCount,
         pushString(pmachine::rtl::detail::latin1ToUtf8(text));
         if (sp == before) pmachine::rtl::detail::fail("unable to allocate reference assignment");
         const Value result = stack[--sp];
-        if (target->isReference()) assignReference(*target, result, depth + 1);
+        if (target->isReference() && !target->isNull()) assignReference(*target, result, depth + 1);
         else *target = result;
     };
 
@@ -1904,7 +1905,7 @@ void PMachine::runInstructions(size_t instructionCount,
         for (auto it = nameFrames.rbegin(); it != nameFrames.rend(); ++it) {
             for (auto binding = it->rbegin(); binding != it->rend(); ++binding) {
                 if (binding->first == key) {
-                    if (binding->second.isReference()) assignReference(binding->second, value, 0);
+                    if (binding->second.isReference() && !binding->second.isNull()) assignReference(binding->second, value, 0);
                     else binding->second = value;
                     return;
                 }
@@ -2419,6 +2420,16 @@ void PMachine::runInstructions(size_t instructionCount,
             ++pc;
             continue;
         }
+        case OP_PUSH_NULL: {
+            if (sp >= STACK_SIZE) {
+                gFlowState["__runtime_error"] = "stack overflow";
+                gFlowState["__memory_pressure"] = captureMemoryPressureSnapshot(static_cast<size_t>(sp), STACK_SIZE).memoryPressureLevel;
+                goto pmachineRunExit;
+            }
+            stack[sp++] = Value::makeNull();
+            ++pc;
+            continue;
+        }
         case OP_PUSH_REF: {
             if (sp >= STACK_SIZE) pmachine::rtl::detail::fail("stack overflow");
             VariableReference entry;
@@ -2785,6 +2796,16 @@ void PMachine::runInstructions(size_t instructionCount,
                     ++pc;
                     continue;
                 }
+                if (lhsValue.isNull() || rhsValue.isNull()) {
+                    if (instr.opcode != OP_EQ && instr.opcode != OP_NEQ) {
+                        gFlowState["__runtime_error"] = "null values only support equality comparisons";
+                        goto pmachineRunExit;
+                    }
+                    const bool equal = lhsValue.isNull() && rhsValue.isNull();
+                    stack[sp - 1] = (instr.opcode == OP_EQ ? equal : !equal) ? 1 : 0;
+                    ++pc;
+                    continue;
+                }
                 const bool asReal = rhsValue.isReal() || lhsValue.isReal();
                 // Integer deadlines must not lose precision through a float conversion.
                 stack[sp - 1] = asReal ? compareOperands(instr.opcode, lhsValue.asReal(), rhsValue.asReal())
@@ -2861,6 +2882,13 @@ void PMachine::runInstructions(size_t instructionCount,
         }
         case OP_STREQ:
         case OP_STRNEQ: {
+            if (sp >= 2 && (stack[sp - 1].isNull() || stack[sp - 2].isNull())) {
+                const bool equal = stack[sp - 1].isNull() && stack[sp - 2].isNull();
+                stack[sp - 2] = (instr.opcode == OP_STREQ ? equal : !equal) ? 1 : 0;
+                --sp;
+                ++pc;
+                continue;
+            }
             if (isStringAtDepth(1) && isStringAtDepth(2)) {
                 const std::string rhs = popString();
                 const std::string lhs = popString();
@@ -2964,7 +2992,7 @@ void PMachine::runInstructions(size_t instructionCount,
                 allocationStage = "hosted-variable-store";
                 allocationBytes = 0;
                 if (const Value* found = hostedFrames->find(instr.strOperand.c_str())) {
-                    if (found->isReference()) assignReference(*found, stack[sp - 1], 0);
+                    if (found->isReference() && !found->isNull()) assignReference(*found, stack[sp - 1], 0);
                     else *const_cast<Value*>(found) = stack[sp - 1];
                 }
                 else hostedStorageError = hostedFrames->store(instr.strOperand.c_str(), stack[sp - 1]);
@@ -3207,8 +3235,10 @@ void PMachine::runInstructions(size_t instructionCount,
                     goto pmachineRunExit;
                 }
                 sp -= instr.value;
-                if (result.value.isString()) pushString(result.text);
-                else stack[sp++] = result.value;
+                if (symbol != "system.assert.equals" && symbol != "system.coroutine.yield") {
+                    if (result.value.isString()) pushString(result.text);
+                    else stack[sp++] = result.value;
+                }
                 ++pc;
                 continue;
             }

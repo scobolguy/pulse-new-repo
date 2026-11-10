@@ -1,6 +1,11 @@
+import { validateReferenceKind } from '../../shared/reference-abi.mjs';
+
 // Only instances issued by this heap are references; integers remain integers.
 export class ObjectRef {
-  constructor() { Object.freeze(this); }
+  constructor(kind = 'object') {
+    this.kind = validateReferenceKind(kind);
+    Object.freeze(this);
+  }
 }
 
 export class ManagedObjects {
@@ -21,6 +26,7 @@ export class ManagedObjects {
   #block(ref) {
     if (ref === 0) throw new Error('nil object dereference');
     if (!(ref instanceof ObjectRef)) throw new TypeError('object reference required');
+    if (ref.kind !== 'object') throw new TypeError(`object reference required, got ${ref.kind}`);
     const block = this.#blocks.get(ref);
     if (!block) throw new Error('invalid object handle');
     return block;
@@ -49,7 +55,7 @@ export class ManagedObjects {
     if (bytes > ManagedObjects.ARENA_BYTES - this.#top && this.#top > this.#stats.liveBytes) this.#compact();
     if (bytes > ManagedObjects.ARENA_BYTES - this.#top) this.#fail('managed heap arena exhausted');
     const reservation = this.#memory?.reserve(this.#scope, bytes);
-    const ref = new ObjectRef();
+    const ref = new ObjectRef('object');
     this.#blocks.set(ref, { values: Array(count).fill(0), bytes, offset: this.#top, refs: 0, reservation });
     this.#top += bytes;
     ++this.#stats.allocations;

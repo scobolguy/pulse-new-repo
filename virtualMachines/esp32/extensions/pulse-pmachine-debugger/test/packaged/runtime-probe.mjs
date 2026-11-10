@@ -166,6 +166,25 @@ for (const starter of LANGUAGE_EDITORS.filter(item => compilers[item.id])) {
   }
 }
 
+const kotlinExpanded = compilers.kotlin(
+  'fun <T> echo(value: T, other: T = value): T = other\n' +
+  'fun main() {\n' +
+  ' println("${echo(41)}:${"a😀é".length}")\n' +
+  ' println(128.toByte())\n' +
+  ' println(true.toString())\n' +
+  ' println(2 in 1..3)\n' +
+  ' for (n in Int.MAX_VALUE..Int.MAX_VALUE) { println(n); continue }\n' +
+  '}', { fileName: 'expanded.kt' });
+const kotlinExpandedResult = await runtime.executeProgram({
+  instructions: runtime.parsePcode(kotlinExpanded.pcodeText),
+  programMap: kotlinExpanded.programMap,
+  inputQueue: 'vscode.pmachine', sourceMessage: '',
+  runtimeContext: { maxSteps: 100000, maxCallDepth: 64 },
+});
+assert.deepEqual(kotlinExpandedResult.stdout, ['41:4', '-128', 'true', 'true', '2147483647']);
+assert.equal(kotlinExpandedResult.stepLimitHit, false);
+assert.equal(kotlinExpandedResult.error, null);
+
 const wfl = LANGUAGE_EDITORS.find(item => item.id === 'wfl').content;
 const fortran77 = compilers.fortranish([
   '      INTEGER A(2),U', '      DATA A(2)/42/', '      U=6',

@@ -1,6 +1,297 @@
 {
   "version": "1.0",
-  "timestamp": "2026-10-07T15:37:05.322Z",
-  "nodes": [],
-  "manifests": {}
+  "timestamp": "2026-11-09T21:35:17.132Z",
+  "nodes": [
+    {
+      "id": "child1",
+      "type": "esp32-device",
+      "name": "child1",
+      "ip": "192.168.2.157",
+      "port": 80,
+      "capabilities": {
+        "device.control": true,
+        "led.control": true,
+        "relay.control": true
+      },
+      "metadata": {
+        "hardware": "ESP32-CAM",
+        "source": "known-device",
+        "discoveryMethod": "manual"
+      },
+      "registeredAt": 1793390981979,
+      "lastSeen": 0,
+      "topology": {
+        "parentNodeId": "Neptune"
+      }
+    },
+    {
+      "id": "child2",
+      "type": "esp32-device",
+      "name": "child2",
+      "ip": "192.168.2.59",
+      "port": 80,
+      "capabilities": {
+        "device.control": true,
+        "led.control": true,
+        "relay.control": true
+      },
+      "metadata": {
+        "hardware": "ESP8266",
+        "source": "known-device",
+        "discoveryMethod": "manual"
+      },
+      "registeredAt": 1793390982612,
+      "lastSeen": 0,
+      "topology": {
+        "parentNodeId": "Neptune"
+      }
+    },
+    {
+      "id": "child3",
+      "type": "esp32-device",
+      "name": "child3",
+      "ip": "192.168.2.58",
+      "port": 80,
+      "capabilities": {
+        "device.control": true,
+        "led.control": true,
+        "relay.control": true
+      },
+      "metadata": {
+        "hardware": "ESP32",
+        "source": "known-device",
+        "discoveryMethod": "manual"
+      },
+      "registeredAt": 1793390982621,
+      "lastSeen": 0,
+      "topology": {
+        "parentNodeId": "Neptune"
+      }
+    }
+  ],
+  "manifests": {
+    "ESP32-VM-6700": {
+      "nodeId": "ESP32-VM-6700",
+      "nodeName": "ESP32-VM-6700",
+      "role": "doorbell-camera-s3",
+      "version": "2026.06.06",
+      "firmwareBuildStamp": "Sep  9 2026 13:08:16",
+      "manufacturer": "RichardLabs",
+      "model": "ESP32-CAM",
+      "ip": "192.168.2.83",
+      "httpPort": 80,
+      "preferredTaskType": "doorbell-camera",
+      "firmwareTrack": "stable",
+      "devices": [
+        {
+          "id": "LEDPIN",
+          "type": "device",
+          "driver": "gpio",
+          "pin": 2,
+          "capabilities": [
+            "set_output",
+            "raise",
+            "lower"
+          ]
+        },
+        {
+          "id": "RELAY",
+          "type": "device",
+          "driver": "gpio",
+          "pin": 21,
+          "capabilities": [
+            "toggle",
+            "turnOn",
+            "turnOff"
+          ],
+          "visibility": "private"
+        }
+      ],
+      "services": [
+        {
+          "id": "ffs",
+          "type": "filesystem-service",
+          "endpoints": [
+            {
+              "path": "/ffs/list",
+              "method": "GET"
+            },
+            {
+              "path": "/ffs/read",
+              "method": "GET"
+            },
+            {
+              "path": "/ffs/write",
+              "method": "POST"
+            }
+          ]
+        },
+        {
+          "id": "pmachine",
+          "type": "vm-service",
+          "endpoints": [
+            {
+              "path": "/pmachine/run",
+              "method": "POST"
+            },
+            {
+              "path": "/pmachine/status",
+              "method": "GET"
+            },
+            {
+              "path": "/pmachine/edge_ingress_stage",
+              "method": "POST"
+            }
+          ]
+        },
+        {
+          "id": "camera",
+          "type": "camera-service",
+          "endpoints": [
+            {
+              "path": "/api/camera/capture",
+              "method": "GET",
+              "returns": "jpeg"
+            },
+            {
+              "path": "/api/camera/status",
+              "method": "GET",
+              "returns": "json"
+            }
+          ]
+        },
+        {
+          "id": "time-authority",
+          "type": "time-service",
+          "endpoints": [
+            {
+              "path": "/time/authority",
+              "method": "GET",
+              "returns": "json"
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "id": "nodeBeacon",
+          "type": "udp-broadcast",
+          "transport": "udp"
+        },
+        {
+          "id": "motionDetected",
+          "type": "object",
+          "transport": "udp"
+        }
+      ],
+      "control": {
+        "switch": {},
+        "sensor": {}
+      },
+      "port": 80,
+      "name": "ESP32-VM-6700",
+      "_receivedAt": "2026-10-31T12:35:27.536Z"
+    },
+    "ESP32-VM-6C5C": {
+      "nodeId": "ESP32-VM-6C5C",
+      "nodeName": "ESP32-VM-6C5C",
+      "role": "generalist",
+      "version": "2026.06.06",
+      "firmwareBuildStamp": "Sep 28 2026 10:03:18",
+      "manufacturer": "RichardLabs",
+      "model": "ESP32",
+      "ip": "192.168.2.155",
+      "httpPort": 80,
+      "preferredTaskType": "balanced",
+      "firmwareTrack": "stable",
+      "devices": [
+        {
+          "id": "LEDPIN",
+          "type": "device",
+          "driver": "gpio",
+          "pin": 2,
+          "capabilities": [
+            "set_output",
+            "raise",
+            "lower"
+          ]
+        },
+        {
+          "id": "RELAY",
+          "type": "device",
+          "driver": "gpio",
+          "pin": 5,
+          "capabilities": [
+            "toggle",
+            "turnOn",
+            "turnOff"
+          ],
+          "visibility": "private"
+        }
+      ],
+      "services": [
+        {
+          "id": "ffs",
+          "type": "filesystem-service",
+          "endpoints": [
+            {
+              "path": "/ffs/list",
+              "method": "GET"
+            },
+            {
+              "path": "/ffs/read",
+              "method": "GET"
+            },
+            {
+              "path": "/ffs/write",
+              "method": "POST"
+            }
+          ]
+        },
+        {
+          "id": "pmachine",
+          "type": "vm-service",
+          "endpoints": [
+            {
+              "path": "/pmachine/run",
+              "method": "POST"
+            },
+            {
+              "path": "/pmachine/status",
+              "method": "GET"
+            },
+            {
+              "path": "/pmachine/edge_ingress_stage",
+              "method": "POST"
+            }
+          ]
+        },
+        {
+          "id": "time-authority",
+          "type": "time-service",
+          "endpoints": [
+            {
+              "path": "/time/authority",
+              "method": "GET",
+              "returns": "json"
+            }
+          ]
+        }
+      ],
+      "events": [
+        {
+          "id": "nodeBeacon",
+          "type": "udp-broadcast",
+          "transport": "udp"
+        }
+      ],
+      "control": {
+        "switch": {},
+        "sensor": {}
+      },
+      "port": 80,
+      "name": "ESP32-VM-6C5C",
+      "_receivedAt": "2026-11-09T21:31:18.411Z"
+    }
+  }
 }

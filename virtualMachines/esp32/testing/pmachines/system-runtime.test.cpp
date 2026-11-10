@@ -23,6 +23,24 @@ int main() {
     };
     const int minimum = std::numeric_limits<int32_t>::min();
     const int maximum = std::numeric_limits<int32_t>::max();
+    for (const auto& entry : {
+        std::pair<std::string, int>{"", 0}, {"ascii", 5}, {"\xc3\xa9", 1},
+        {"e\xcc\x81", 2}, {"\xe6\xbc\xa2", 1}, {"\xf0\x9f\x98\x80", 2}
+    }) {
+        assert(run("system.string.length", {text(entry.first)}).value.i == entry.second);
+    }
+    for (const std::string value : {"\x80", "\xc0\x80", "\xc2", "\xc2\x41", "\xe0\x80\x80",
+                                   "\xed\xa0\x80", "\xf4\x90\x80\x80", "\xf5\x80\x80\x80"})
+        run("system.string.length", {text(value)}, "String length requires valid Unicode");
+    run("system.string.length", {integer(42)}, "String length requires a string");
+    run("system.string.length", {}, "String length requires a string");
+    for (const auto* operation : {"divide", "remainder"}) {
+        const std::string symbol = "system.int32." + std::string(operation) + ".unchecked";
+        assert(run(symbol, {integer(minimum), integer(-1)}).value.i ==
+               (std::string(operation) == "divide" ? minimum : 0));
+        run(symbol, {integer(1), integer(0)}, "System.DivideByZeroException");
+    }
+    assert(run("system.int32.divide.unchecked", {integer(42), integer(2)}).value.i == 21);
     assert(run("system.int32.add", {integer(20), integer(22)}).value.i == 42);
     assert(run("system.int32.subtract", {integer(minimum), integer(-1)}).value.i == minimum + 1);
     assert(run("system.int32.multiply", {integer(minimum), integer(1)}).value.i == minimum);

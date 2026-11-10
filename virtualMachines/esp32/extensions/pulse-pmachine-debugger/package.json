@@ -7,7 +7,7 @@
     "url": "https://github.com/scobolguy/pulse-new-repo.git",
     "directory": "virtualMachines/esp32/extensions/pulse-pmachine-debugger"
   },
-  "version": "0.1.24",
+  "version": "0.1.25",
   "publisher": "pulse",
   "icon": "src/media/pulse-icon.png",
   "files": [
@@ -113,14 +113,22 @@
     "languages": [
       {
         "id": "screencobol",
-        "aliases": ["SCREEN COBOL"],
-        "extensions": [".scob"],
+        "aliases": [
+          "SCREEN COBOL"
+        ],
+        "extensions": [
+          ".scob"
+        ],
         "configuration": "./screencobol-language-configuration.json"
       },
       {
         "id": "assemblerish",
-        "aliases": ["Assemblerish"],
-        "extensions": [".asmish"],
+        "aliases": [
+          "Assemblerish"
+        ],
+        "extensions": [
+          ".asmish"
+        ],
         "configuration": "./assemblerish-language-configuration.json"
       },
       {
@@ -191,8 +199,12 @@
       },
       {
         "id": "kotlin",
-        "aliases": ["Kotlin"],
-        "extensions": [".kt"],
+        "aliases": [
+          "Kotlin"
+        ],
+        "extensions": [
+          ".kt"
+        ],
         "configuration": "./kotlin-language-configuration.json"
       },
       {

@@ -1,0 +1,1814 @@
+{
+  "suite": "Shared scalar integers differential validation",
+  "complete": true,
+  "fullStandardConformance": false,
+  "startedAt": "2026-11-03T00:11:08.083Z",
+  "limits": {
+    "jobs": 4,
+    "processTimeoutMs": 120000,
+    "maxSteps": 100000,
+    "maxCallDepth": 64
+  },
+  "reference": {
+    "sdk": "10.0.101",
+    "referencePack": "10.0.1",
+    "csharpLanguage": "7.0",
+    "vbLanguage": "11",
+    "compilerHashes": {
+      "csc.dll": "7c5f885d3807cb16dc5746d826d053563c2898f27d6aebb166d6d115176dfaa5",
+      "vbc.dll": "efbe2feace242105fce8fa30d3bef484be539f485f18d2a5f9e005c4917024a1"
+    }
+  },
+  "harnessFingerprint": "d8827ecdb93cd64fe7cdbd355d87c26adecf98ae656f60257406c73d38bfa54b",
+  "cases": [
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-001",
+      "sourceSha256": "17f4ef55cd396237868eb7733c2f49426864450e0afdbe5b5d9d5d9326adaf5f",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "-128",
+          "127",
+          "127",
+          "128"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "-128",
+          "127",
+          "127",
+          "128"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "-128",
+          "127",
+          "127",
+          "128"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-002",
+      "sourceSha256": "85dbfc368be653b384491395df9c11501215704f4fb1e1ee69c8026dcacd78a3",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "127",
+          "-128",
+          "-128"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "127",
+          "-128",
+          "-128"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "127",
+          "-128",
+          "-128"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-003",
+      "sourceSha256": "2ed636963eb85ad4d9c5b316d3646561b06af416688023d2e40d65ea276c37f7",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "-128",
+          "-128"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "-128",
+          "-128"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "-128",
+          "-128"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-004",
+      "sourceSha256": "414d1f7cfe3548527f190679ee25af17d15478389eeac053fd70ee0ad5a97319",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "runtime-error",
+        "stdout": [],
+        "diagnostic": "System\\.OverflowException"
+      },
+      "pulse": {
+        "stage": "runtime-error",
+        "diagnostic": "System.OverflowException",
+        "errorName": "RangeError"
+      },
+      "reference": {
+        "stage": "runtime-error",
+        "diagnostic": "Unhandled exception. System.OverflowException: Arithmetic operation resulted in an overflow.\r\n   at Program.Main()\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-005",
+      "sourceSha256": "d27634285a815c91cf4514e5d86716446cbc9dc0f4f5212be32c63d6013ea832",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "negative",
+        "stdout": [],
+        "diagnostic": "Cannot use 'int' where 'sbyte'"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "C# CS-WIDTH-005:4:11: Cannot use 'int' where 'sbyte' is required",
+        "errorName": "SyntaxError"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\CS-WIDTH-005.cs(4,11): error CS0031: Constant value '128' cannot be converted to a 'sbyte'\r\nC:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\CS-WIDTH-005.cs(4,7): warning CS0219: The variable 'n' is assigned but its value is never used\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-006",
+      "sourceSha256": "762821af5b9104af0a4bf436e6f05188078c3e704bab6a40ce3452f6a3d8e3b6",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "0",
+          "255",
+          "255",
+          "256"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "0",
+          "255",
+          "255",
+          "256"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "0",
+          "255",
+          "255",
+          "256"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-007",
+      "sourceSha256": "d408e12c0eb9971e6264778c56fb3a0f6a6b792cc612e0d8e4068aab3ca845db",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "255",
+          "0",
+          "0"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "255",
+          "0",
+          "0"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "255",
+          "0",
+          "0"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-008",
+      "sourceSha256": "77b84d9394d2a5446fccdcd7b1949b6d1206136a0168c6869ae3eb7e5eac93d0",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "0",
+          "0"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "0",
+          "0"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "0",
+          "0"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-009",
+      "sourceSha256": "a4173e68849b84491a158862c803f91f940d75f03dfb695921109f096d95fe14",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "runtime-error",
+        "stdout": [],
+        "diagnostic": "System\\.OverflowException"
+      },
+      "pulse": {
+        "stage": "runtime-error",
+        "diagnostic": "System.OverflowException",
+        "errorName": "RangeError"
+      },
+      "reference": {
+        "stage": "runtime-error",
+        "diagnostic": "Unhandled exception. System.OverflowException: Arithmetic operation resulted in an overflow.\r\n   at Program.Main()\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-010",
+      "sourceSha256": "6735a5a76b1b67a650374a74873629cac39be2d7b8b1be830505a81c2a520e04",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "negative",
+        "stdout": [],
+        "diagnostic": "Cannot use 'int' where 'byte'"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "C# CS-WIDTH-010:4:10: Cannot use 'int' where 'byte' is required",
+        "errorName": "SyntaxError"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\CS-WIDTH-010.cs(4,10): error CS0031: Constant value '256' cannot be converted to a 'byte'\r\nC:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\CS-WIDTH-010.cs(4,6): warning CS0219: The variable 'n' is assigned but its value is never used\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-011",
+      "sourceSha256": "6becaf644120f5d2f2f36af335c228f78578699214d1783af6c2df7d96cd8dae",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "-32768",
+          "32767",
+          "32767",
+          "32768"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "-32768",
+          "32767",
+          "32767",
+          "32768"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "-32768",
+          "32767",
+          "32767",
+          "32768"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-012",
+      "sourceSha256": "90026b3d02f3b64d881e30d127be1f7bcde339b2d8d2e3db87180f85d209d61b",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "32767",
+          "-32768",
+          "-32768"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "32767",
+          "-32768",
+          "-32768"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "32767",
+          "-32768",
+          "-32768"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-013",
+      "sourceSha256": "3f81df82b35844f3fc10cd7bf508e985302a71dc9de0215273b1062281aeaa50",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "-32768",
+          "-32768"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "-32768",
+          "-32768"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "-32768",
+          "-32768"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-014",
+      "sourceSha256": "efa76504d895970c7c852775365f4c38807e9d335b9882fb67a3c321e1873291",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "runtime-error",
+        "stdout": [],
+        "diagnostic": "System\\.OverflowException"
+      },
+      "pulse": {
+        "stage": "runtime-error",
+        "diagnostic": "System.OverflowException",
+        "errorName": "RangeError"
+      },
+      "reference": {
+        "stage": "runtime-error",
+        "diagnostic": "Unhandled exception. System.OverflowException: Arithmetic operation resulted in an overflow.\r\n   at Program.Main()\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-015",
+      "sourceSha256": "d16358807de041b6db2e15a4720eb3d03f23e742876eadd99a1da92470c81194",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "negative",
+        "stdout": [],
+        "diagnostic": "Cannot use 'int' where 'short'"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "C# CS-WIDTH-015:4:11: Cannot use 'int' where 'short' is required",
+        "errorName": "SyntaxError"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\CS-WIDTH-015.cs(4,11): error CS0031: Constant value '32768' cannot be converted to a 'short'\r\nC:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\CS-WIDTH-015.cs(4,7): warning CS0219: The variable 'n' is assigned but its value is never used\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-016",
+      "sourceSha256": "ae945742d9feca9e0f7bf8b028d890a35a5aa9c7e4fcd14bf5b86848e3aa0b5e",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "0",
+          "65535",
+          "65535",
+          "65536"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "0",
+          "65535",
+          "65535",
+          "65536"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "0",
+          "65535",
+          "65535",
+          "65536"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-017",
+      "sourceSha256": "12b7d4c58a7101b752bee07dcc327d2be898ddedc2979189a5bfc2021815f287",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "65535",
+          "0",
+          "0"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "65535",
+          "0",
+          "0"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "65535",
+          "0",
+          "0"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-018",
+      "sourceSha256": "2d582aef249961811de471fb184392c567afa2925523802599c961fad3a053ef",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "0",
+          "0"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "0",
+          "0"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "0",
+          "0"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-019",
+      "sourceSha256": "ed8dd638493e39b9fc98d68ef1857ea3e9212eb4e15b1d889a3ad3f2d5086ae5",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "runtime-error",
+        "stdout": [],
+        "diagnostic": "System\\.OverflowException"
+      },
+      "pulse": {
+        "stage": "runtime-error",
+        "diagnostic": "System.OverflowException",
+        "errorName": "RangeError"
+      },
+      "reference": {
+        "stage": "runtime-error",
+        "diagnostic": "Unhandled exception. System.OverflowException: Arithmetic operation resulted in an overflow.\r\n   at Program.Main()\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-020",
+      "sourceSha256": "b418eb6f361d82621ffa0d344cf78624117e48a347ff624292ee96ff73b03e3d",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "negative",
+        "stdout": [],
+        "diagnostic": "Cannot use 'int' where 'ushort'"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "C# CS-WIDTH-020:4:12: Cannot use 'int' where 'ushort' is required",
+        "errorName": "SyntaxError"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\CS-WIDTH-020.cs(4,12): error CS0031: Constant value '65536' cannot be converted to a 'ushort'\r\nC:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\CS-WIDTH-020.cs(4,8): warning CS0219: The variable 'n' is assigned but its value is never used\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-021",
+      "sourceSha256": "18e624f9d981fef734055ca8ce0df954f4b594aace2da860eb6aa2776c1abf76",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "255",
+          "255",
+          "-255"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "255",
+          "255",
+          "-255"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "255",
+          "255",
+          "-255"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-022",
+      "sourceSha256": "f63d8b7af48bb31305165129946408a23a77cb8ba3793a2dbd9be6b3b5a0fb2e",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "negative",
+        "stdout": [],
+        "diagnostic": "Cannot use 'int' where 'byte'"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "C# CS-WIDTH-022:4:17: Cannot use 'int' where 'byte' is required",
+        "errorName": "SyntaxError"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\CS-WIDTH-022.cs(4,17): error CS0266: Cannot implicitly convert type 'int' to 'byte'. An explicit conversion exists (are you missing a cast?)\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-023",
+      "sourceSha256": "d0fbe02d45eb4ffa980f7a3ded7465e7c2b23335f9de0f435c57a336bec7d69e",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "negative",
+        "stdout": [],
+        "diagnostic": "Cannot use 'short' where 'ushort'"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "C# CS-WIDTH-023:4:21: Cannot use 'short' where 'ushort' is required",
+        "errorName": "SyntaxError"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\CS-WIDTH-023.cs(4,21): error CS0266: Cannot implicitly convert type 'short' to 'ushort'. An explicit conversion exists (are you missing a cast?)\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-024",
+      "sourceSha256": "424119f509a2e49cdb9f261ff396e784115d15b92bd8bd060579c2a97f5c33d4",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "negative",
+        "stdout": [],
+        "diagnostic": "Constant byte conversion overflows"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "C# CS-WIDTH-024:4:16: Constant byte conversion overflows",
+        "errorName": "SyntaxError"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\CS-WIDTH-024.cs(4,16): error CS0221: Constant value '256' cannot be converted to a 'byte' (use 'unchecked' syntax to override)\r\nC:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\CS-WIDTH-024.cs(4,6): warning CS0219: The variable 'b' is assigned but its value is never used\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-025",
+      "sourceSha256": "924a22522afa1423ee5ad99a0142d92e32f269dceb0b9cdb0a123d018c7c68ec",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "runtime-error",
+        "stdout": [],
+        "diagnostic": "System\\.OverflowException"
+      },
+      "pulse": {
+        "stage": "runtime-error",
+        "diagnostic": "System.OverflowException",
+        "errorName": "RangeError"
+      },
+      "reference": {
+        "stage": "runtime-error",
+        "diagnostic": "Unhandled exception. System.OverflowException: Arithmetic operation resulted in an overflow.\r\n   at Program.Main()\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-026",
+      "sourceSha256": "a9c18f11a4e2eacb62b0ec8dde46f93befcc40b0541107cf98ee07b93f0dd9d5",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "runtime-error",
+        "stdout": [],
+        "diagnostic": "System\\.OverflowException"
+      },
+      "pulse": {
+        "stage": "runtime-error",
+        "diagnostic": "System.OverflowException",
+        "errorName": "RangeError"
+      },
+      "reference": {
+        "stage": "runtime-error",
+        "diagnostic": "Unhandled exception. System.OverflowException: Arithmetic operation resulted in an overflow.\r\n   at Program.Main()\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-027",
+      "sourceSha256": "98e85d4c2e87e77ab07ff530d54386b946cee01333bdc8e018ab498c1c2997a3",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "runtime-error",
+        "stdout": [],
+        "diagnostic": "System\\.OverflowException"
+      },
+      "pulse": {
+        "stage": "runtime-error",
+        "diagnostic": "System.OverflowException",
+        "errorName": "RangeError"
+      },
+      "reference": {
+        "stage": "runtime-error",
+        "diagnostic": "Unhandled exception. System.OverflowException: Arithmetic operation resulted in an overflow.\r\n   at Program.Main()\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-028",
+      "sourceSha256": "0e3d01975e7823b5a50e26f55925b28f128bd46b5bfbcec16953757f103a3d8a",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "255",
+          "n=255"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "255",
+          "n=255"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "255",
+          "n=255"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-029",
+      "sourceSha256": "73f34101db157c6e81db6c21d1250700145d887056f0b4df5049b500857a3cfd",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "byte",
+          "short",
+          "int",
+          "identity"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "byte",
+          "short",
+          "int",
+          "identity"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "byte",
+          "short",
+          "int",
+          "identity"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-030",
+      "sourceSha256": "a47dcd6e7c4bc4b2569f2467a3f4460a120b980a4d4dc2cbd8594c325b885aa0",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "short"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "short"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "short"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-031",
+      "sourceSha256": "ea9158c739a814c415c1d1203c3ce0cbca7ddfab9dab328ce81afa7ef8b3d91a",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "signed"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "signed"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "signed"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-032",
+      "sourceSha256": "09c2517ad21cf277c33c50148906865ab82dea85cc5480213192fb900bcd408b",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "65535",
+          "127"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "65535",
+          "127"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "65535",
+          "127"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-033",
+      "sourceSha256": "cfa2a3ab3fc8fb661f458ca03d784dbd1e9e5aca78e8fc59ffed672feb5ef333",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "negative",
+        "stdout": [],
+        "diagnostic": "Ambiguous invocation"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "C# CS-WIDTH-033:1:102: Ambiguous invocation of 'F': P.F`0(short,int); P.F`0(int,short)",
+        "errorName": "SyntaxError"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\CS-WIDTH-033.cs(1,102): error CS0121: The call is ambiguous between the following methods or properties: 'P.F(short, int)' and 'P.F(int, short)'\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-WIDTH-034",
+      "sourceSha256": "82b6f4457f33d77559bf438a0d8b092054a810604be52f69e88a02f033ba433e",
+      "compilerFingerprint": "aae88605369496483df2b811b817b945135426fafe8bff2fa96af0003d8cabd7",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "255"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "255"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "255"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-001",
+      "sourceSha256": "8c3a35501fcf3c7afb79ab816e11263f7555ca08516db164220b58c85a6325ea",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "-128",
+          "127",
+          "127",
+          "127"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "-128",
+          "127",
+          "127",
+          "127"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "-128",
+          "127",
+          "127",
+          "127"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-002",
+      "sourceSha256": "e6047ffe15dffd70c33609cf8ebe133163ce00a12aa199d43d11a73e6a145454",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "-1",
+          "-1",
+          "True"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "-1",
+          "-1",
+          "True"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "-1",
+          "-1",
+          "True"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-003",
+      "sourceSha256": "13fc3a3d4fd425ec6d817a0a5e835503f0ebe32a4dcb6dbbd4b4045dc95e4014",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "runtime-error",
+        "stdout": [],
+        "diagnostic": "System\\.OverflowException"
+      },
+      "pulse": {
+        "stage": "runtime-error",
+        "diagnostic": "System.OverflowException",
+        "errorName": "RangeError"
+      },
+      "reference": {
+        "stage": "runtime-error",
+        "diagnostic": "Unhandled exception. System.OverflowException: Arithmetic operation resulted in an overflow.\r\n   at Program.Main()\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-004",
+      "sourceSha256": "f71eed8497e480ccbb643b4280d6069e05f0a8b85e3c9df5f46c0da737dfbc4b",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "negative",
+        "stdout": [],
+        "diagnostic": "Cannot use 'int' where 'sbyte'"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "VBish VB-WIDTH-004:5:18: Cannot use 'int' where 'sbyte' is required",
+        "errorName": "SyntaxError"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\VB-WIDTH-004.vb(5) : error BC30439: Constant expression not representable in type 'SByte'.\r\n\r\nDim n As SByte = 128\r\n                 ~~~\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-005",
+      "sourceSha256": "561b5159f1df4a76727e1f01730d3e1e6262df00ebf28918a0a8fe7f5c7fc259",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "runtime-error",
+        "stdout": [],
+        "diagnostic": "System\\.OverflowException"
+      },
+      "pulse": {
+        "stage": "runtime-error",
+        "diagnostic": "System.OverflowException",
+        "errorName": "RangeError"
+      },
+      "reference": {
+        "stage": "runtime-error",
+        "diagnostic": "Unhandled exception. System.OverflowException: Arithmetic operation resulted in an overflow.\r\n   at Program.Main()\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-006",
+      "sourceSha256": "c577594205ce8484d8d37d88a8f329bd6cae7165636ad93e56df421986bde72c",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "0",
+          "255",
+          "255",
+          "255"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "0",
+          "255",
+          "255",
+          "255"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "0",
+          "255",
+          "255",
+          "255"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-007",
+      "sourceSha256": "bf08cef0a6b4cf739d35922bc6db125084e89e961de7fc1af8ae4bf2c90ad235",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "255",
+          "255",
+          "True"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "255",
+          "255",
+          "True"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "255",
+          "255",
+          "True"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-008",
+      "sourceSha256": "784bf01275cabb810d9248397a440eb95d54c9aa854cb0221d0551bc39f16e09",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "runtime-error",
+        "stdout": [],
+        "diagnostic": "System\\.OverflowException"
+      },
+      "pulse": {
+        "stage": "runtime-error",
+        "diagnostic": "System.OverflowException",
+        "errorName": "RangeError"
+      },
+      "reference": {
+        "stage": "runtime-error",
+        "diagnostic": "Unhandled exception. System.OverflowException: Arithmetic operation resulted in an overflow.\r\n   at Program.Main()\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-009",
+      "sourceSha256": "7a1635eeb3da9e79e977df8c49738434bf8524dc83fe6838e7995bc30e1cac23",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "negative",
+        "stdout": [],
+        "diagnostic": "Cannot use 'int' where 'byte'"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "VBish VB-WIDTH-009:5:17: Cannot use 'int' where 'byte' is required",
+        "errorName": "SyntaxError"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\VB-WIDTH-009.vb(5) : error BC30439: Constant expression not representable in type 'Byte'.\r\n\r\nDim n As Byte = 256\r\n                ~~~\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-010",
+      "sourceSha256": "eb99066ee1836461a3c3ace3696c23d0e19d69c7e50c3f730b508a50063a6f3a",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "runtime-error",
+        "stdout": [],
+        "diagnostic": "System\\.OverflowException"
+      },
+      "pulse": {
+        "stage": "runtime-error",
+        "diagnostic": "System.OverflowException",
+        "errorName": "RangeError"
+      },
+      "reference": {
+        "stage": "runtime-error",
+        "diagnostic": "Unhandled exception. System.OverflowException: Arithmetic operation resulted in an overflow.\r\n   at Program.Main()\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-011",
+      "sourceSha256": "5b410c07c88eeffd08b9e8358fa0c7db5faa75992f744354a5e69c3e83662a4b",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "-32768",
+          "32767",
+          "32767",
+          "32767"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "-32768",
+          "32767",
+          "32767",
+          "32767"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "-32768",
+          "32767",
+          "32767",
+          "32767"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-012",
+      "sourceSha256": "ff9fc85ba1f53ee9dcc9acaf87a8d899fba4d72bd6677b5a389a48c71ee898b1",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "-1",
+          "-1",
+          "True"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "-1",
+          "-1",
+          "True"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "-1",
+          "-1",
+          "True"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-013",
+      "sourceSha256": "b271588ff3edc3c8760caf701d08cc2571e8055a2179c4e4b7c123e06f864f60",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "runtime-error",
+        "stdout": [],
+        "diagnostic": "System\\.OverflowException"
+      },
+      "pulse": {
+        "stage": "runtime-error",
+        "diagnostic": "System.OverflowException",
+        "errorName": "RangeError"
+      },
+      "reference": {
+        "stage": "runtime-error",
+        "diagnostic": "Unhandled exception. System.OverflowException: Arithmetic operation resulted in an overflow.\r\n   at Program.Main()\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-014",
+      "sourceSha256": "d7545d8deb167e61be0780e829960e7903087b68e95561ee6fc6e36b9e897cdf",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "negative",
+        "stdout": [],
+        "diagnostic": "Cannot use 'int' where 'short'"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "VBish VB-WIDTH-014:5:18: Cannot use 'int' where 'short' is required",
+        "errorName": "SyntaxError"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\VB-WIDTH-014.vb(5) : error BC30439: Constant expression not representable in type 'Short'.\r\n\r\nDim n As Short = 32768\r\n                 ~~~~~\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-015",
+      "sourceSha256": "ce3ce89db20910de860a73b26fd486d5b54065d079c69fa237efda626c59cd56",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "runtime-error",
+        "stdout": [],
+        "diagnostic": "System\\.OverflowException"
+      },
+      "pulse": {
+        "stage": "runtime-error",
+        "diagnostic": "System.OverflowException",
+        "errorName": "RangeError"
+      },
+      "reference": {
+        "stage": "runtime-error",
+        "diagnostic": "Unhandled exception. System.OverflowException: Arithmetic operation resulted in an overflow.\r\n   at Program.Main()\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-016",
+      "sourceSha256": "0e34baa4cb8201ae608be5f13277111316470423b3da27e05bb341cf2e555a6d",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "0",
+          "65535",
+          "65535",
+          "65535"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "0",
+          "65535",
+          "65535",
+          "65535"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "0",
+          "65535",
+          "65535",
+          "65535"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-017",
+      "sourceSha256": "7e40d4ff971467327e9d7ea896419f1f21a74bd9dd75514ba384be873c35d4cf",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "65535",
+          "65535",
+          "True"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "65535",
+          "65535",
+          "True"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "65535",
+          "65535",
+          "True"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-018",
+      "sourceSha256": "00012d0be816810c5d6a07f09953daac0cb02a9074f71479d5a1158ac7167cea",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "runtime-error",
+        "stdout": [],
+        "diagnostic": "System\\.OverflowException"
+      },
+      "pulse": {
+        "stage": "runtime-error",
+        "diagnostic": "System.OverflowException",
+        "errorName": "RangeError"
+      },
+      "reference": {
+        "stage": "runtime-error",
+        "diagnostic": "Unhandled exception. System.OverflowException: Arithmetic operation resulted in an overflow.\r\n   at Program.Main()\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-019",
+      "sourceSha256": "7ccf6b34a720e428f98d26d0653b70fff87e01fb653986677b5145deb8a44a3e",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "negative",
+        "stdout": [],
+        "diagnostic": "Cannot use 'int' where 'ushort'"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "VBish VB-WIDTH-019:5:19: Cannot use 'int' where 'ushort' is required",
+        "errorName": "SyntaxError"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\VB-WIDTH-019.vb(5) : error BC30439: Constant expression not representable in type 'UShort'.\r\n\r\nDim n As UShort = 65536\r\n                  ~~~~~\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-020",
+      "sourceSha256": "665230287268ffb31b027665b77054e7691c4128a4f973c24919409b76770d4f",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "runtime-error",
+        "stdout": [],
+        "diagnostic": "System\\.OverflowException"
+      },
+      "pulse": {
+        "stage": "runtime-error",
+        "diagnostic": "System.OverflowException",
+        "errorName": "RangeError"
+      },
+      "reference": {
+        "stage": "runtime-error",
+        "diagnostic": "Unhandled exception. System.OverflowException: Arithmetic operation resulted in an overflow.\r\n   at Program.Main()\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-021",
+      "sourceSha256": "b3cb21445aea25d70156e7179f96593c0258f3db039961efb2d139dd775ce8dd",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "255",
+          "255",
+          "-255"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "255",
+          "255",
+          "-255"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "255",
+          "255",
+          "-255"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-022",
+      "sourceSha256": "a25bce22ab4e15c7e2eebda95e005c710cc83680224d878a57732f388eb82e4b",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "runtime-error",
+        "stdout": [],
+        "diagnostic": "System\\.OverflowException"
+      },
+      "pulse": {
+        "stage": "runtime-error",
+        "diagnostic": "System.OverflowException",
+        "errorName": "RangeError"
+      },
+      "reference": {
+        "stage": "runtime-error",
+        "diagnostic": "Unhandled exception. System.OverflowException: Arithmetic operation resulted in an overflow.\r\n   at Program.Main()\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-023",
+      "sourceSha256": "195908b6870cc32eb84621ca310ed520af5e716a92435e53759101601e321dd7",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "32768"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "32768"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "32768"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-024",
+      "sourceSha256": "c273bebb9e912edcf5a2bc0251767aba5efa8916733a749281dec1faee973c65",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "negative",
+        "stdout": [],
+        "diagnostic": "Cannot use 'int' where 'byte'"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "VBish VB-WIDTH-024:6:15: Cannot use 'int' where 'byte' is required",
+        "errorName": "SyntaxError"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\VB-WIDTH-024.vb(6) : error BC30512: Option Strict On disallows implicit conversions from 'Integer' to 'Byte'.\r\n\r\nDim b As Byte=n\r\n              ~\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-025",
+      "sourceSha256": "59951bb3dc2148e0e9c7ef852eb1dba73870df5b95e7eec1d397dfbe24723620",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "negative",
+        "stdout": [],
+        "diagnostic": "Constant byte conversion overflows"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "VBish VB-WIDTH-025:5:19: Constant byte conversion overflows",
+        "errorName": "SyntaxError"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\VB-WIDTH-025.vb(5) : error BC30439: Constant expression not representable in type 'Byte'.\r\n\r\nConsole.WriteLine(CByte(256))\r\n                        ~~~  \r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-026",
+      "sourceSha256": "4fc439af0d95946dff19dc5c71b2a09cf8de5d241344e695d37b5e07c2cb200d",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "127",
+          "True"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "127",
+          "True"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "127",
+          "True"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-027",
+      "sourceSha256": "bb64db00cfb6ee2e5321ac6eb0ff997eb982ae1a6eaa9fa6fd883e4fdb37836b",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "byte",
+          "short",
+          "int",
+          "identity"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "byte",
+          "short",
+          "int",
+          "identity"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "byte",
+          "short",
+          "int",
+          "identity"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-028",
+      "sourceSha256": "2c0b39397804813cee8340868ba99e2f19f98c038675fa76888a4f1e314105e8",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "short"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "short"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "short"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-029",
+      "sourceSha256": "28fe2f4de96bb174d97031a8492a64f810fdcf37b2c82b1bb5b6dd24c3460019",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "signed"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "signed"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "signed"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-030",
+      "sourceSha256": "4038017e540302dd7407d6eeb0f49ee225f84c1d6aedccd9cdb2d06d271c75b9",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "65535",
+          "127"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "65535",
+          "127"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "65535",
+          "127"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-031",
+      "sourceSha256": "21da74fed0b6a3ac926971abbeb9c7edffb0f5e6116581fca7e537aa33baf23b",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "negative",
+        "stdout": [],
+        "diagnostic": "Ambiguous invocation"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "VBish VB-WIDTH-031:9:1: Ambiguous invocation of 'f': p.f`0(short,int); p.f`0(int,short)",
+        "errorName": "SyntaxError"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\VB-WIDTH-031.vb(9) : error BC30521: Overload resolution failed because no accessible 'F' is most specific for these arguments:\r\n    'Public Sub F(a As Short, b As Integer)': Not most specific.\r\n    'Public Sub F(a As Integer, b As Short)': Not most specific.\r\n\r\nF(b,b)\r\n~     \r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-032",
+      "sourceSha256": "6bd51cec91d4aa20da6ee0b1d5607f8f054a51f49adb5d6b987b27b5079199c2",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "255"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "255"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "255"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-033",
+      "sourceSha256": "1edb6fe990ebfde91dabe85d286d161b068afaf926937d67d9bd27d9a8adf6b0",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "negative",
+        "stdout": [],
+        "diagnostic": "Cannot use 'int' where 'sbyte'"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "VBish VB-WIDTH-033:6:1: Cannot use 'int' where 'sbyte' is required",
+        "errorName": "SyntaxError"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\VB-WIDTH-033.vb(6) : error BC30512: Option Strict On disallows implicit conversions from 'Integer' to 'SByte'.\r\n\r\nn += 1\r\n~~~~~~\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-034",
+      "sourceSha256": "dffda9d8613f83b560a97a176c112be50ce55385036542375c2b1d930a5c6196",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "negative",
+        "stdout": [],
+        "diagnostic": "Cannot use 'int' where 'byte'"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "VBish VB-WIDTH-034:6:1: Cannot use 'int' where 'byte' is required",
+        "errorName": "SyntaxError"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\VB-WIDTH-034.vb(6) : error BC30512: Option Strict On disallows implicit conversions from 'Integer' to 'Byte'.\r\n\r\nn += 1\r\n~~~~~~\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-035",
+      "sourceSha256": "9e2cac396ef534694e97d78de589ba2a6b48ce1bd04ef2bc1fca5e5a1442d944",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "negative",
+        "stdout": [],
+        "diagnostic": "Cannot use 'int' where 'short'"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "VBish VB-WIDTH-035:6:1: Cannot use 'int' where 'short' is required",
+        "errorName": "SyntaxError"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\VB-WIDTH-035.vb(6) : error BC30512: Option Strict On disallows implicit conversions from 'Integer' to 'Short'.\r\n\r\nn += 1\r\n~~~~~~\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-WIDTH-036",
+      "sourceSha256": "0e8ab1ae10046e5d0284955f33a4b5f754a4c6bae8db62fe2e235a1871e6911c",
+      "compilerFingerprint": "1b6812106d6ad3d748e8ce7f5044cdb552254b738672182d64db58c527c53e16",
+      "expected": {
+        "kind": "negative",
+        "stdout": [],
+        "diagnostic": "Cannot use 'int' where 'ushort'"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "VBish VB-WIDTH-036:6:1: Cannot use 'int' where 'ushort' is required",
+        "errorName": "SyntaxError"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-integers-differential-kQvYCI\\VB-WIDTH-036.vb(6) : error BC30512: Option Strict On disallows implicit conversions from 'Integer' to 'UShort'.\r\n\r\nn += 1\r\n~~~~~~\r\n"
+      },
+      "status": "pass"
+    }
+  ],
+  "finishedAt": "2026-11-03T00:29:34.517Z",
+  "counts": {
+    "pass": 70,
+    "fail": 0
+  }
+}

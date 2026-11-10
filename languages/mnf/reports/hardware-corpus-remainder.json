@@ -1,0 +1,121 @@
+{
+  "generatedAt": "2026-10-30T00:04:10.036Z",
+  "standard": "fortran77",
+  "runtime": "esp32-pmachine",
+  "node": "http://192.168.2.90",
+  "sourceMapOmitted": true,
+  "comparison": "All output records compared; trailing whitespace and reference exit-0 marker ignored",
+  "total": 5,
+  "planned": 69,
+  "counts": {
+    "output_mismatch": 1,
+    "device_error": 1,
+    "worker_error": 3
+  },
+  "results": [
+    {
+      "file": "FM411.f",
+      "status": "output_mismatch",
+      "steps": 32972,
+      "difference": {
+        "line": 46,
+        "expected": "        34       PASS",
+        "actual": "        34       FAIL               2              6"
+      },
+      "failureRecords": [
+        "        34       FAIL               2              6",
+        "        35       FAIL               2              6"
+      ],
+      "output": [
+        "1",
+        "           FORTRAN COMPILER VALIDATION SYSTEM",
+        "                      VERSION 2.1",
+        " ",
+        "         FOR OFFICIAL USE ONLY - COPYRIGHT 1978",
+        " ",
+        "                   SUBSET LEVEL TEST",
+        "                         FM411",
+        " ",
+        "      TEST     PASS/FAIL     COMPUTED        CORRECT",
+        "      ----------------------------------------------",
+        " ",
+        "         1       PASS",
+        "         2       PASS",
+        "         3       PASS",
+        "         4       PASS",
+        "         5       PASS",
+        "         6       PASS",
+        "         7       PASS",
+        "         8       PASS",
+        "         9       PASS",
+        "        10       PASS",
+        "        11       PASS",
+        "        12       PASS",
+        "        13       PASS",
+        "        14       PASS",
+        "        15       PASS",
+        "        16       PASS",
+        "        17       PASS",
+        "        18       PASS",
+        "        19       PASS",
+        "        20       PASS",
+        "        21       PASS",
+        "        22       PASS",
+        "        23       PASS",
+        "        24       PASS",
+        "        25       PASS",
+        "        26       PASS",
+        "        27       PASS",
+        "        28       PASS",
+        "        29       PASS",
+        "        30       PASS",
+        "        31       PASS",
+        "        32       PASS",
+        "        33       PASS",
+        "        34       FAIL               2              6",
+        "        35       FAIL               2              6",
+        " ",
+        "      ----------------------------------------------",
+        " ",
+        "                     END OF PROGRAM FM411",
+        " ",
+        "                        2 TESTS FAILED",
+        "                       33 TESTS PASSED",
+        "                        0 TESTS DELETED"
+      ],
+      "pcodeBytes": 136974,
+      "memoryPressure": {
+        "freeHeapBytes": 42372,
+        "stackHighWaterBytes": 29536,
+        "stackHeapGapBytes": 12836,
+        "riskLevel": "warning",
+        "stackHeapCollisionRisk": false
+      },
+      "durationMs": 55421
+    },
+    {
+      "file": "FM413.f",
+      "status": "device_error",
+      "error": "fetch failed: read ECONNRESET",
+      "durationMs": 71119
+    },
+    {
+      "file": "FM500.f",
+      "status": "worker_error",
+      "error": "Board did not recover: The operation was aborted due to timeout",
+      "durationMs": 118522
+    },
+    {
+      "file": "FM503.f",
+      "status": "worker_error",
+      "error": "Board did not recover: The operation was aborted due to timeout",
+      "durationMs": 118437
+    },
+    {
+      "file": "FM506.f",
+      "status": "worker_error",
+      "error": "Board did not recover: The operation was aborted due to timeout",
+      "durationMs": 118483
+    }
+  ]
+}

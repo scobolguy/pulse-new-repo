@@ -1,0 +1,1087 @@
+{
+  "suite": "Shared scalar overload differential validation",
+  "complete": true,
+  "fullStandardConformance": false,
+  "startedAt": "2026-11-02T20:32:03.165Z",
+  "limits": {
+    "jobs": 4,
+    "processTimeoutMs": 120000,
+    "maxSteps": 100000,
+    "maxCallDepth": 64
+  },
+  "reference": {
+    "sdk": "10.0.101",
+    "referencePack": "10.0.1",
+    "csharpLanguage": "7.0",
+    "vbLanguage": "11",
+    "compilerHashes": {
+      "csc.dll": "7c5f885d3807cb16dc5746d826d053563c2898f27d6aebb166d6d115176dfaa5",
+      "vbc.dll": "efbe2feace242105fce8fa30d3bef484be539f485f18d2a5f9e005c4917024a1"
+    }
+  },
+  "harnessFingerprint": "c03e08dbe5b2b7f2bc4da5cf095d7adea882efda994dcc4658d2d90fe63b4813",
+  "cases": [
+    {
+      "language": "csharp",
+      "id": "CS-UNSUPPORTED-005",
+      "sourceSha256": "6dfd2534dc6168507c2be00b2121c136c8f62d121a7e1bb7f6e22294f7e8ebb8",
+      "compilerFingerprint": "6851030ffd3b466b8290f5843e79c5db21cedc359d65cdbf709f06fb2eed3505",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "7",
+          "s"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "7",
+          "s"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "7",
+          "s"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-OVER-001",
+      "sourceSha256": "f9768f2516f2ede5e9e35706ac54a186eb6d441d731cc234ac94fa69292c7821",
+      "compilerFingerprint": "6851030ffd3b466b8290f5843e79c5db21cedc359d65cdbf709f06fb2eed3505",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "int",
+          "bool",
+          "string"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "int",
+          "bool",
+          "string"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "int",
+          "bool",
+          "string"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-OVER-002",
+      "sourceSha256": "d12e8c501e2d5761088814503ac97b41d1ccbb92e8506b856103b98bb9e25da8",
+      "compilerFingerprint": "6851030ffd3b466b8290f5843e79c5db21cedc359d65cdbf709f06fb2eed3505",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "0",
+          "2",
+          "7"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "0",
+          "2",
+          "7"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "0",
+          "2",
+          "7"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-OVER-003",
+      "sourceSha256": "9f3e2c6149709cf2e0206fb3f452154651f83abfd8a7a20f55ea730e69789e74",
+      "compilerFingerprint": "6851030ffd3b466b8290f5843e79c5db21cedc359d65cdbf709f06fb2eed3505",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "concrete",
+          "generic",
+          "generic"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "concrete",
+          "generic",
+          "generic"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "concrete",
+          "generic",
+          "generic"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-OVER-004",
+      "sourceSha256": "10975979217a51d053881c6865fc5c284b9371dc4ba8d0d99fcf917dc83a8680",
+      "compilerFingerprint": "6851030ffd3b466b8290f5843e79c5db21cedc359d65cdbf709f06fb2eed3505",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "specific",
+          "specific"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "specific",
+          "specific"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "specific",
+          "specific"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-OVER-005",
+      "sourceSha256": "9a737812ddfab948d788103ac4b840c0e1f163be0497bb2c977cb0859d1a443f",
+      "compilerFingerprint": "6851030ffd3b466b8290f5843e79c5db21cedc359d65cdbf709f06fb2eed3505",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "concrete"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "concrete"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "concrete"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-OVER-006",
+      "sourceSha256": "6269da81bd9661a97952d3fd24519194415dd5c291bc6d4742ce36d31d8bbc19",
+      "compilerFingerprint": "6851030ffd3b466b8290f5843e79c5db21cedc359d65cdbf709f06fb2eed3505",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "7",
+          "8",
+          "s"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "7",
+          "8",
+          "s"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "7",
+          "8",
+          "s"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-OVER-007",
+      "sourceSha256": "8c203664c69df0a127168350e6473244b638d931e3a8ba342b5c7c5eb231d02a",
+      "compilerFingerprint": "6851030ffd3b466b8290f5843e79c5db21cedc359d65cdbf709f06fb2eed3505",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "one",
+          "one",
+          "two"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "one",
+          "one",
+          "two"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "one",
+          "one",
+          "two"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-OVER-008",
+      "sourceSha256": "8ee2f1a6eb79f408e07c6054c16d109e70b1c220ac1fc2b05993dd0418ff3082",
+      "compilerFingerprint": "6851030ffd3b466b8290f5843e79c5db21cedc359d65cdbf709f06fb2eed3505",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "generic",
+          "concrete"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "generic",
+          "concrete"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "generic",
+          "concrete"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-OVER-009",
+      "sourceSha256": "f51cea7305264bdbbf307c8edb9e4b791ef5ffe4a3326ade0bf59a1f7759586b",
+      "compilerFingerprint": "6851030ffd3b466b8290f5843e79c5db21cedc359d65cdbf709f06fb2eed3505",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "42"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "42"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "42"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-OVER-010",
+      "sourceSha256": "e10ba744f900fe5c4dfd69dc2619ea3d1909eba135cdc24dbe992464bdc77f9d",
+      "compilerFingerprint": "6851030ffd3b466b8290f5843e79c5db21cedc359d65cdbf709f06fb2eed3505",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "120",
+          "done"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "120",
+          "done"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "120",
+          "done"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-OVER-011",
+      "sourceSha256": "f9efad8e66efb01187c2ae342df27d6eeb219d5efb3b465158821c6085048573",
+      "compilerFingerprint": "6851030ffd3b466b8290f5843e79c5db21cedc359d65cdbf709f06fb2eed3505",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "12",
+          "3"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "12",
+          "3"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "12",
+          "3"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-OVER-012",
+      "sourceSha256": "b019e84cf11f25a2407e4b698bf00f43628e53f80b9fa50b760f50af54283880",
+      "compilerFingerprint": "6851030ffd3b466b8290f5843e79c5db21cedc359d65cdbf709f06fb2eed3505",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "specific"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "specific"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "specific"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-OVERNEG-001",
+      "sourceSha256": "69d1158434988e0474d755f9b719c02b175a34baba66c7f7a89d7c36d0958f74",
+      "compilerFingerprint": "6851030ffd3b466b8290f5843e79c5db21cedc359d65cdbf709f06fb2eed3505",
+      "expected": {
+        "kind": "negative",
+        "diagnostic": "Duplicate method signature"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "C# CS-OVERNEG-001:1:71: Duplicate method signature 'P.F`0(int)'"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-overload-differential-2BBVsd\\CS-OVERNEG-001.cs(1,71): error CS0111: Type 'P' already defines a member called 'F' with the same parameter types\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-OVERNEG-002",
+      "sourceSha256": "1e9a623bb13d0aba11554278ca4d03abb3a97095ea551d761e86ade15152c18a",
+      "compilerFingerprint": "6851030ffd3b466b8290f5843e79c5db21cedc359d65cdbf709f06fb2eed3505",
+      "expected": {
+        "kind": "negative",
+        "diagnostic": "Duplicate method signature"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "C# CS-OVERNEG-002:1:67: Duplicate method signature 'P.F`1(!0)'"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-overload-differential-2BBVsd\\CS-OVERNEG-002.cs(1,67): error CS0111: Type 'P' already defines a member called 'F' with the same parameter types\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-OVERNEG-003",
+      "sourceSha256": "8bf15c1a13c457264d103e4cafcd03f7afab90be1a7e72f503456b8126669771",
+      "compilerFingerprint": "6851030ffd3b466b8290f5843e79c5db21cedc359d65cdbf709f06fb2eed3505",
+      "expected": {
+        "kind": "negative",
+        "diagnostic": "Ambiguous invocation"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "C# CS-OVERNEG-003:3:22: Ambiguous invocation of 'F': P.F`1(!0,int); P.F`1(int,!0)"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-overload-differential-2BBVsd\\CS-OVERNEG-003.cs(3,22): error CS0121: The call is ambiguous between the following methods or properties: 'P.F<T>(T, int)' and 'P.F<T>(int, T)'\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-OVERNEG-004",
+      "sourceSha256": "bd26994ba3890c470352cce9d31ca0e77a9bdf18c6d21885e212716ff6657c27",
+      "compilerFingerprint": "6851030ffd3b466b8290f5843e79c5db21cedc359d65cdbf709f06fb2eed3505",
+      "expected": {
+        "kind": "negative",
+        "diagnostic": "No applicable overload"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "C# CS-OVERNEG-004:2:22: No applicable overload for 'F' with argument types (string): Cannot use 'string' where 'int' is required; Cannot use 'string' where 'bool' is required"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-overload-differential-2BBVsd\\CS-OVERNEG-004.cs(2,24): error CS1503: Argument 1: cannot convert from 'string' to 'int'\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-OVERNEG-005",
+      "sourceSha256": "5900f959e515a7251cb02f635b1d17d4b80c4b26ca95a96cb721699e86bc30f3",
+      "compilerFingerprint": "6851030ffd3b466b8290f5843e79c5db21cedc359d65cdbf709f06fb2eed3505",
+      "expected": {
+        "kind": "negative",
+        "diagnostic": "No applicable overload"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "C# CS-OVERNEG-005:2:22: No applicable overload for 'F' with argument types (int, int): Method 'F' requires 1 argument(s); Method 'F' requires 1 argument(s)"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-overload-differential-2BBVsd\\CS-OVERNEG-005.cs(2,22): error CS1501: No overload for method 'F' takes 2 arguments\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-OVERNEG-006",
+      "sourceSha256": "2f00e852572aad74932b8c5eac94462ca806717887e4144bff155fedbc96c6fd",
+      "compilerFingerprint": "6851030ffd3b466b8290f5843e79c5db21cedc359d65cdbf709f06fb2eed3505",
+      "expected": {
+        "kind": "negative",
+        "diagnostic": "No applicable overload.*Cannot infer"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "C# CS-OVERNEG-006:2:22: No applicable overload for 'F' with argument types (int): Cannot infer type argument 'T'; supply explicit type arguments; Cannot infer type argument 'U'; supply explicit type arguments"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-overload-differential-2BBVsd\\CS-OVERNEG-006.cs(2,22): error CS0411: The type arguments for method 'P.F<T>(int)' cannot be inferred from the usage. Try specifying the type arguments explicitly.\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-OVERNEG-007",
+      "sourceSha256": "d026171420ec8a96f30532a44875ccd787ba4223b543244092fb181502f025c5",
+      "compilerFingerprint": "6851030ffd3b466b8290f5843e79c5db21cedc359d65cdbf709f06fb2eed3505",
+      "expected": {
+        "kind": "negative",
+        "diagnostic": "Ambiguous invocation"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "C# CS-OVERNEG-007:3:22: Ambiguous invocation of 'F': P.F`2(!0,!1); P.F`2(!1,!0)"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-overload-differential-2BBVsd\\CS-OVERNEG-007.cs(3,22): error CS0121: The call is ambiguous between the following methods or properties: 'P.F<T, U>(T, U)' and 'P.F<T, U>(U, T)'\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-OVERNEG-008",
+      "sourceSha256": "96972780fca33b3408b709a70fc0747a392177d1ef46fe27530845f5d6563ee1",
+      "compilerFingerprint": "6851030ffd3b466b8290f5843e79c5db21cedc359d65cdbf709f06fb2eed3505",
+      "expected": {
+        "kind": "negative",
+        "diagnostic": "Ambiguous invocation"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "C# CS-OVERNEG-008:3:31: Ambiguous invocation of 'F': P.F`1(!0,int); P.F`1(int,!0)"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-overload-differential-2BBVsd\\CS-OVERNEG-008.cs(3,31): error CS0121: The call is ambiguous between the following methods or properties: 'P.F<T>(T, int)' and 'P.F<T>(int, T)'\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "csharp",
+      "id": "CS-OVERNEG-009",
+      "sourceSha256": "258b9b29cf6934e83c4e35d2f3674ad1d5eb9f48d32f95bd189e0a7df55d7a89",
+      "compilerFingerprint": "6851030ffd3b466b8290f5843e79c5db21cedc359d65cdbf709f06fb2eed3505",
+      "expected": {
+        "kind": "negative",
+        "diagnostic": "No applicable overload"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "C# CS-OVERNEG-009:2:22: No applicable overload for 'F' with argument types (int): Method 'F' requires 0 type argument(s); Method 'F' requires 0 type argument(s)"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-overload-differential-2BBVsd\\CS-OVERNEG-009.cs(2,22): error CS0308: The non-generic method 'P.F(int)' cannot be used with type arguments\r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-OVER-001",
+      "sourceSha256": "4fea5df7d7ea251d67518e03b2a7c32637f9814e8ac20cb47143d074de8127eb",
+      "compilerFingerprint": "9f4ee4aa82c71a3e6e335cd958fef368b58a2bd707c0b50dd8bccadfec464697",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "int",
+          "bool",
+          "string"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "int",
+          "bool",
+          "string"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "int",
+          "bool",
+          "string"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-OVER-002",
+      "sourceSha256": "027a1587d139b2c518c33aa279420f68fe95e4631e68af1cdcc4ed0367615212",
+      "compilerFingerprint": "9f4ee4aa82c71a3e6e335cd958fef368b58a2bd707c0b50dd8bccadfec464697",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "0",
+          "2",
+          "7"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "0",
+          "2",
+          "7"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "0",
+          "2",
+          "7"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-OVER-003",
+      "sourceSha256": "95b2bb744867ba0ff3424d96b8a5e1cf721746d5fe7e13a2edd32f62dc5d1c30",
+      "compilerFingerprint": "9f4ee4aa82c71a3e6e335cd958fef368b58a2bd707c0b50dd8bccadfec464697",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "concrete",
+          "generic",
+          "generic"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "concrete",
+          "generic",
+          "generic"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "concrete",
+          "generic",
+          "generic"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-OVER-004",
+      "sourceSha256": "d2db0952b00621c5a8ece670d3006d5e918468910ea017b2b71f961d77613b56",
+      "compilerFingerprint": "9f4ee4aa82c71a3e6e335cd958fef368b58a2bd707c0b50dd8bccadfec464697",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "specific",
+          "specific"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "specific",
+          "specific"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "specific",
+          "specific"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-OVER-005",
+      "sourceSha256": "a64782db36ee5358d6b19dee838ce17c2938d1bcf590c7d8f07645e4e77814ed",
+      "compilerFingerprint": "9f4ee4aa82c71a3e6e335cd958fef368b58a2bd707c0b50dd8bccadfec464697",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "concrete"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "concrete"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "concrete"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-OVER-006",
+      "sourceSha256": "1a3d0c8623509fcf0b7d97a6d377688230cc1130de0e091ccd3acbebfe335ddd",
+      "compilerFingerprint": "9f4ee4aa82c71a3e6e335cd958fef368b58a2bd707c0b50dd8bccadfec464697",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "7",
+          "8",
+          "s"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "7",
+          "8",
+          "s"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "7",
+          "8",
+          "s"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-OVER-007",
+      "sourceSha256": "baeff0a7e9dbbee22abf542a346978042a6bbb7954ce343f934caac7fc5a8077",
+      "compilerFingerprint": "9f4ee4aa82c71a3e6e335cd958fef368b58a2bd707c0b50dd8bccadfec464697",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "one",
+          "one",
+          "two"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "one",
+          "one",
+          "two"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "one",
+          "one",
+          "two"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-OVER-008",
+      "sourceSha256": "4f4204b5f6a01965cc3851133c92a4d16ee9896a0f2214c3b20064228b08519d",
+      "compilerFingerprint": "9f4ee4aa82c71a3e6e335cd958fef368b58a2bd707c0b50dd8bccadfec464697",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "generic",
+          "concrete"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "generic",
+          "concrete"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "generic",
+          "concrete"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-OVER-009",
+      "sourceSha256": "9fe54582cf6e4636b2cf09b00cf8d95a22b2f98362078642e1741896f704a950",
+      "compilerFingerprint": "9f4ee4aa82c71a3e6e335cd958fef368b58a2bd707c0b50dd8bccadfec464697",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "42"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "42"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "42"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-OVER-010",
+      "sourceSha256": "90a4855c8182bbb3c106a78c0aa8c74202c98eb913b79ed40431017b97aba343",
+      "compilerFingerprint": "9f4ee4aa82c71a3e6e335cd958fef368b58a2bd707c0b50dd8bccadfec464697",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "120",
+          "done"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "120",
+          "done"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "120",
+          "done"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-OVER-011",
+      "sourceSha256": "ce32f32da67069ef8a08f92d938cdb8d2cafaa788382ee022334ddca81868601",
+      "compilerFingerprint": "9f4ee4aa82c71a3e6e335cd958fef368b58a2bd707c0b50dd8bccadfec464697",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "1",
+          "2",
+          "12"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "1",
+          "2",
+          "12"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "1",
+          "2",
+          "12"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-OVER-012",
+      "sourceSha256": "af0a84b52a107aea569d1d8b019ac9ca72c70a9fea2c44395a8f99effbb357cf",
+      "compilerFingerprint": "9f4ee4aa82c71a3e6e335cd958fef368b58a2bd707c0b50dd8bccadfec464697",
+      "expected": {
+        "kind": "positive",
+        "stdout": [
+          "specific"
+        ]
+      },
+      "pulse": {
+        "stage": "executed",
+        "stdout": [
+          "specific"
+        ]
+      },
+      "reference": {
+        "stage": "executed",
+        "stdout": [
+          "specific"
+        ]
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-OVERNEG-001",
+      "sourceSha256": "7c0d99dddfe6523f65e6f8f19281e55ed3fed3ec1f952ca190a3f09fcf4ec6f1",
+      "compilerFingerprint": "9f4ee4aa82c71a3e6e335cd958fef368b58a2bd707c0b50dd8bccadfec464697",
+      "expected": {
+        "kind": "negative",
+        "diagnostic": "Duplicate method signature"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "VBish VB-OVERNEG-001:7:10: Duplicate method signature 'p.f`0(int)'"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-overload-differential-2BBVsd\\VB-OVERNEG-001.vb(4) : error BC30301: 'Public Function F(x As Integer) As Integer' and 'Public Function f(y As Integer) As Boolean' cannot overload each other because they differ only by return types.\r\n\r\nFunction F(x As Integer) As Integer\r\n         ~                         \r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-OVERNEG-002",
+      "sourceSha256": "d8530d546ab918fc91f20b4ebebca5489b661a860094a6483df601ad1c13eac7",
+      "compilerFingerprint": "9f4ee4aa82c71a3e6e335cd958fef368b58a2bd707c0b50dd8bccadfec464697",
+      "expected": {
+        "kind": "negative",
+        "diagnostic": "Duplicate method signature"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "VBish VB-OVERNEG-002:7:10: Duplicate method signature 'p.f`1(!0)'"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-overload-differential-2BBVsd\\VB-OVERNEG-002.vb(4) : error BC30269: 'Public Function F(Of T)(x As T) As T' has multiple definitions with identical signatures.\r\n\r\nFunction F(Of T)(x As T) As T\r\n         ~                   \r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-OVERNEG-003",
+      "sourceSha256": "b78136f42826a00a6c3b5cd9a54042b6bb5cd54f1273abfe135c6c7a6d0f8444",
+      "compilerFingerprint": "9f4ee4aa82c71a3e6e335cd958fef368b58a2bd707c0b50dd8bccadfec464697",
+      "expected": {
+        "kind": "negative",
+        "diagnostic": "Ambiguous invocation"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "VBish VB-OVERNEG-003:11:1: Ambiguous invocation of 'f': p.f`1(!0,int); p.f`1(int,!0)"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-overload-differential-2BBVsd\\VB-OVERNEG-003.vb(11) : error BC30521: Overload resolution failed because no accessible 'F' is most specific for these arguments:\r\n    'Public Function F(Of Integer)(x As Integer, y As Integer) As String': Not most specific.\r\n    'Public Function F(Of Integer)(x As Integer, y As Integer) As String': Not most specific.\r\n\r\nF(1,2)\r\n~     \r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-OVERNEG-004",
+      "sourceSha256": "bae2110c22432500f3ebcf73e955c55827d7030a3ffc2aa94de2b6f93bef5f88",
+      "compilerFingerprint": "9f4ee4aa82c71a3e6e335cd958fef368b58a2bd707c0b50dd8bccadfec464697",
+      "expected": {
+        "kind": "negative",
+        "diagnostic": "No applicable overload"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "VBish VB-OVERNEG-004:9:1: No applicable overload for 'f' with argument types (string): Cannot use 'string' where 'int' is required; Cannot use 'string' where 'bool' is required"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-overload-differential-2BBVsd\\VB-OVERNEG-004.vb(9) : error BC30518: Overload resolution failed because no accessible 'F' can be called with these arguments:\r\n    'Public Sub F(x As Integer)': Option Strict On disallows implicit conversions from 'String' to 'Integer'.\r\n    'Public Sub F(x As Boolean)': Option Strict On disallows implicit conversions from 'String' to 'Boolean'.\r\n\r\nF(\"s\")\r\n~     \r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-OVERNEG-005",
+      "sourceSha256": "29da6ca9521482247ed120e78eb12e61617df357d734e35730d3d1a7bc7c71bb",
+      "compilerFingerprint": "9f4ee4aa82c71a3e6e335cd958fef368b58a2bd707c0b50dd8bccadfec464697",
+      "expected": {
+        "kind": "negative",
+        "diagnostic": "No applicable overload"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "VBish VB-OVERNEG-005:9:1: No applicable overload for 'f' with argument types (int, int): Method 'f' requires 1 argument(s); Method 'f' requires 1 argument(s)"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-overload-differential-2BBVsd\\VB-OVERNEG-005.vb(9) : error BC30516: Overload resolution failed because no accessible 'F' accepts this number of arguments.\r\n\r\nF(1,2)\r\n~     \r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-OVERNEG-006",
+      "sourceSha256": "dbe2c404da9bec083cfb55e83aa4e281474f29a3e97399882697e82ebc002f12",
+      "compilerFingerprint": "9f4ee4aa82c71a3e6e335cd958fef368b58a2bd707c0b50dd8bccadfec464697",
+      "expected": {
+        "kind": "negative",
+        "diagnostic": "No applicable overload.*Cannot infer"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "VBish VB-OVERNEG-006:9:1: No applicable overload for 'f' with argument types (int): Cannot infer type argument 't'; supply explicit type arguments; Cannot infer type argument 'u'; supply explicit type arguments"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-overload-differential-2BBVsd\\VB-OVERNEG-006.vb(9) : error BC30518: Overload resolution failed because no accessible 'F' can be called with these arguments:\r\n    'Public Sub F(Of T)(x As Integer)': Type parameter 'T' cannot be inferred.\r\n    'Public Sub F(Of U, V)(x As Boolean)': Type parameter 'U' cannot be inferred.\r\n    'Public Sub F(Of U, V)(x As Boolean)': Type parameter 'V' cannot be inferred.\r\n\r\nF(1)\r\n~   \r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-OVERNEG-007",
+      "sourceSha256": "10a6497259f00c953c26e6c92ca5a51d2d021cae3f39f154712a38e0695b6668",
+      "compilerFingerprint": "9f4ee4aa82c71a3e6e335cd958fef368b58a2bd707c0b50dd8bccadfec464697",
+      "expected": {
+        "kind": "negative",
+        "diagnostic": "Ambiguous invocation"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "VBish VB-OVERNEG-007:11:1: Ambiguous invocation of 'f': p.f`2(!0,!1); p.f`2(!1,!0)"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-overload-differential-2BBVsd\\VB-OVERNEG-007.vb(11) : error BC30521: Overload resolution failed because no accessible 'F' is most specific for these arguments:\r\n    'Public Function F(Of Integer, Integer)(x As Integer, y As Integer) As String': Not most specific.\r\n    'Public Function F(Of Integer, Integer)(x As Integer, y As Integer) As String': Not most specific.\r\n\r\nF(1,2)\r\n~     \r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-OVERNEG-008",
+      "sourceSha256": "6c530d008411439946e08acd74819da2156b90543ed7399ca620e54d106b2c48",
+      "compilerFingerprint": "9f4ee4aa82c71a3e6e335cd958fef368b58a2bd707c0b50dd8bccadfec464697",
+      "expected": {
+        "kind": "negative",
+        "diagnostic": "Ambiguous invocation"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "VBish VB-OVERNEG-008:11:19: Ambiguous invocation of 'f': p.f`1(!0,int); p.f`1(int,!0)"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-overload-differential-2BBVsd\\VB-OVERNEG-008.vb(11) : error BC30521: Overload resolution failed because no accessible 'F' is most specific for these arguments:\r\n    'Public Function F(Of Integer)(x As Integer, y As Integer) As String': Not most specific.\r\n    'Public Function F(Of Integer)(x As Integer, y As Integer) As String': Not most specific.\r\n\r\nDim s As String = F(1,2)\r\n                  ~     \r\n"
+      },
+      "status": "pass"
+    },
+    {
+      "language": "vbish",
+      "id": "VB-OVERNEG-009",
+      "sourceSha256": "65c7bc9077666276520b545c65c2431d494a872f1c20b7aa8ec2b96a6d283d26",
+      "compilerFingerprint": "9f4ee4aa82c71a3e6e335cd958fef368b58a2bd707c0b50dd8bccadfec464697",
+      "expected": {
+        "kind": "negative",
+        "diagnostic": "No applicable overload"
+      },
+      "pulse": {
+        "stage": "compile-error",
+        "diagnostic": "VBish VB-OVERNEG-009:9:1: No applicable overload for 'f' with argument types (int): Method 'f' requires 0 type argument(s); Method 'f' requires 0 type argument(s)"
+      },
+      "reference": {
+        "stage": "compile-error",
+        "diagnostic": "C:\\Users\\scobo\\AppData\\Local\\Temp\\pulse-overload-differential-2BBVsd\\VB-OVERNEG-009.vb(9) : error BC32087: Overload resolution failed because no accessible 'F' accepts this number of type arguments.\r\n\r\nF(Of Integer)(1)\r\n~~~~~~~~~~~~~   \r\n"
+      },
+      "status": "pass"
+    }
+  ],
+  "finishedAt": "2026-11-02T20:42:27.009Z",
+  "counts": {
+    "pass": 43,
+    "fail": 0
+  }
+}

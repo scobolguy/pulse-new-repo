@@ -22,6 +22,7 @@ export async function loadRuntimeMachineAuth({ filePath, required = false, owner
       || hashes.has(credential.tokenSha256) || typeof credential.nodeId !== 'string'
       || net.isIP(credential.nodeId) !== 4 || typeof credential.serviceId !== 'string'
       || !identifier.test(credential.serviceId) || credential.ownerAggregatorId !== ownerAggregatorId
+      || (credential.resourceReports !== undefined && typeof credential.resourceReports !== 'boolean')
       || !Array.isArray(credential.childRequests) || !credential.childRequests.length
       || credential.childRequests.some(request => !request || typeof request.serviceId !== 'string'
         || !identifier.test(request.serviceId)
@@ -42,11 +43,23 @@ export async function loadRuntimeMachineAuth({ filePath, required = false, owner
   function guard(kind, fallback) {
     return async (req, res, next) => {
       const credential = authenticate(req);
-      if (!credential) return fallback(req, res, next);
+      if (!credential) {
+        if (kind === 'resources') return res.status(401).json({ error: 'Resource reporting requires a machine credential' });
+        return fallback(req, res, next);
+      }
       const remoteAddress = String(req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
       const instanceId = `${credential.serviceId}@${credential.nodeId}`;
       if (remoteAddress !== credential.nodeId) {
         return res.status(403).json({ error: 'Machine credential does not authorize this node' });
+      }
+      if (kind === 'resources') {
+        if (credential.resourceReports !== true ||
+            req.body?.nodeId !== credential.nodeId || req.body?.serviceId !== credential.serviceId ||
+            req.body?.ownerAggregatorId !== ownerAggregatorId) {
+          return res.status(403).json({ error: 'Machine credential does not authorize this resource report' });
+        }
+        req.runtimeMachineNodeId = credential.nodeId;
+        return next();
       }
       if (kind === 'report') {
         const report = req.body;

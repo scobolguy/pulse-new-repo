@@ -14,6 +14,264 @@ Main capabilities:
 live UDP beacon or PMachine announcement; stale and probe-only entries are
 excluded, and no ESP32 addresses or sample nodes are seeded into the inventory.
 
+## Swarm task recovery foundations
+
+These modules are tested control-plane building blocks, not enabled deployment
+routes or physical-board failover:
+
+- [`swarmTaskCoordinator.mjs`](src/backend/swarmTaskCoordinator.mjs) provides
+  a single-writer durable task journal, resource reservations, task ownership
+  epochs and committed application state. Lease expiry or an explicitly reported
+  runtime crash allows placement on another compatible swarm node; application
+  faults are terminal. Expired or superseded owners cannot renew, commit or
+  complete a task. Reservations conservatively subtract all active task resources
+  from reported free slots/memory; resource reports must be fresh and include
+  the exact executable-bundle SHA-256. This is not a distributed consensus store.
+- [`swarmCheckpointStore.mjs`](src/backend/swarmCheckpointStore.mjs) provides
+  immutable SHA-256-addressed blobs and a two-replica storage pair. Replication
+  succeeds only after both managers flush their files and read back identical
+  bytes. A failed second write leaves harmless unpublished data on the first
+  manager; retry is idempotent. Reads can use one verified replica, but return
+  explicit `degraded` and `failures` fields that callers must surface.
+- [`swarmLeadershipWitness.mjs`](src/backend/swarmLeadershipWitness.mjs) provides
+  aggregator-side arbitration for exactly two enrolled manager identities.
+  Leadership grants and renewals are durably journaled. Takeover is allowed only
+  after the authoritative witness lease expires, and increments the leadership
+  epoch. Keep-alives carry a monotonic sequence; duplicate retries do not extend
+  the lease. A takeover durably records a poison notice for the prior manager and
+  epoch, retrievable after restart. The witness's clock is authoritative; clock
+  rollback fails closed. Neither manager can independently authorize takeover.
+- [`witnessedTaskAdmission.mjs`](src/backend/witnessedTaskAdmission.mjs) gates
+  resource admission, lease renewal, failure, completion, cancellation and expiry
+  through live witness leadership. Task grants persist both worker and leadership
+  epochs. After manager takeover, old worker grants cannot renew or complete, and
+  their reservations are conservatively retained until worker lease expiry.
+  The admission facade deliberately has no local-only checkpoint commit API.
+  Its `publish` and `restore` methods validate both manager and worker grants,
+  snapshot their identity/epoch facts, and revalidate after storage operations.
+  A cancelled, completed, expired or superseded worker cannot publish delayed
+  state or accept a delayed restore. An unavailable admission journal fails
+  closed even if the witness remains available.
+- [`swarmResourceRegistry.mjs`](src/backend/swarmResourceRegistry.mjs) supplies
+  registered admission candidates. Explicit enrollment sets swarm/capability
+  membership; privileged bundle verification records executable SHA-256s.
+  Reports require measured slots/memory, explicit health and strictly increasing
+  per-node sequences. The registry timestamps receipt locally, excludes stale,
+  degraded and offline nodes, and rejects clock rollback. When supplied to the
+  admission facade, caller-provided candidate overrides are rejected.
+
+Resource registry state is intentionally ephemeral: startup requires fresh
+enrollment, bundle verification and reports before admitting work. It bounds
+nodes and per-node bundle IDs and never seeds one free slot or executable
+compatibility from discovery. Report sequences must remain monotonic for an
+enrollment; reboot/session re-enrollment protocols are not implemented. Transport
+must bind reports to authenticated node identities and control privileged
+enrollment/verification; a method parameter named `authenticatedNodeId` is not
+authentication by itself. The registry is not yet connected to live discovery.
+
+[`swarmResourceRoutes.mjs`](src/backend/roles/swarmResourceRoutes.mjs) adds an
+opt-in `POST /api/swarm/resources/report` transport using the existing
+[`runtimeMachineAuth.mjs`](src/backend/security/runtimeMachineAuth.mjs).
+Machine credentials must explicitly set `resourceReports: true`; legacy
+credentials receive no additional authorization. Requests must match the
+credential's IPv4 source address, node, service and owner aggregator. No
+user-session, forwarded-IP or implicit-admin fallback is permitted for this
+endpoint. Reports accept only identity scope, sequence, health and measured
+capacity; capabilities/bundle IDs are rejected. Invalid/replayed reports return
+an explicit error and are logged.
+
+The transport has been exercised over a real loopback HTTP listener with
+temporary test credentials, including spoofed identity/source, replay and
+legacy-auth regressions. Backend registration is opt-in as described below.
+Credential files remain private configuration; bearer credentials require TLS
+or an equivalently protected transport before remote deployment. This module
+does not add firmware-side COM9 reporting or live discovery integration.
+
+```text
+npm run test:swarm:transport
+```
+
+[`swarmResourceReporter.mjs`](src/backend/swarmResourceReporter.mjs) provides
+a one-shot reporting client and an ESP32 read-only collector. The collector
+reads health, PMachine and service-host status sequentially, preserves degraded
+health, requires the supported single-worker metadata, and uses the minimum
+reported free heap. Probe failures or missing measurements throw errors; they
+do not create online reports with default capacity. These separate HTTP reads
+are conservative observations, not atomic resource reservations.
+
+The reporting client validates explicit identity/configuration, allows bearer
+submission only over HTTPS or numeric loopback HTTP, disables redirects, bounds
+the request deadline, checks acknowledgements, and prevents overlapping reports.
+Sequence numbers are consumed even after failures because a lost response may
+have been accepted; the caller must persist monotonically increasing sequences
+across restarts. The optional sequence-file support below persists each attempt
+before sending it and serializes reporters using that file. A process crash can
+leave its `.lock` file behind; inspect that no reporter is still running before
+removing a stale lock manually. The helper does not steal locks automatically.
+
+For an explicitly configured one-shot deployment, supply private environment
+values `PULSE_SWARM_REPORT_URL`, `PULSE_SWARM_NODE_ID`, `PULSE_SWARM_SERVICE_ID`,
+`PULSE_OWNER_AGGREGATOR_ID`, `PULSE_SWARM_MACHINE_TOKEN`,
+`PULSE_SWARM_REPORT_SEQUENCE`, `PULSE_SWARM_RESOURCE_SOURCE` and
+`PULSE_SWARM_SOURCE_URL`, then run:
+
+```text
+npm run swarm:report:once
+```
+
+For an opt-in periodic reporter, also set
+`PULSE_SWARM_REPORT_SEQUENCE_FILE` to a writable persistent file path and run
+`npm run swarm:report:watch`. The first run uses
+`PULSE_SWARM_REPORT_SEQUENCE`; subsequent runs increment the persisted value
+before each attempt. Set `PULSE_SWARM_REPORT_SEQUENCE` only when initializing a
+new sequence file; existing files supply the next value after restart.
+Optionally set `PULSE_SWARM_REPORT_INTERVAL_MS` from 1000 to 300000 milliseconds
+(default 30000). Failed reports are logged and retried at the next interval with
+a new sequence; SIGINT/SIGTERM stops after an active request. Protect the
+sequence file as local runtime state, back it up with the reporter configuration,
+and do not share it across unrelated node identities.
+
+The machine credential's node address must match the reporting process's socket
+source, not the polled device address. A host polling COM9 cannot impersonate
+that board using a board-bound credential. Use `esp32` only for local/read-only
+collection unless the board itself has an authorized reporter; use
+`js-pmachine` for a JS PMachine process with its own configured scheduler.
+The client and HTTP guard were tested end-to-end on loopback; the collector was
+also verified against COM9 with no firmware/services changed. This is not a
+physical authenticated board heartbeat or production backend registration.
+
+The backend registers the resource route only when all three settings are
+present: `PULSE_SWARM_RESOURCE_CONFIG`, `PULSE_RUNTIME_MACHINE_AUTH_FILE` and
+`PULSE_OWNER_AGGREGATOR_ID`. Partial configuration is a startup error. The
+backend also requires `REQUIRE_HTTPS=true`; do not rely on an untrusted
+forwarded-protocol header or send bearer credentials over LAN HTTP. Resource
+configuration is a private, version-1 JSON file containing only public node
+identities and explicit capabilities/bundle hashes:
+
+```json
+{
+  "version": 1,
+  "clusterId": "swarm-a",
+  "nodes": [{
+    "nodeId": "192.0.2.10",
+    "capabilities": ["pmachine"],
+    "codeIds": ["<64-character lowercase SHA-256>"]
+  }]
+}
+```
+
+The separate, private runtime machine credential file uses the existing
+`runtimeMachineAuth` schema and must opt each enrolled reporter in with
+`"resourceReports": true`, its IPv4 `nodeId`, service ID and matching owner
+aggregator ID. Credential material is stored only as SHA-256 in that file; the
+raw token is provisioned privately to the reporter. Configured bundle hashes
+are operator assertions, not measured attestation—the transport report cannot
+add executable compatibility. Registry enrollment/health is in memory and must
+be re-established with fresh reports after each backend restart.
+
+JavaScript PMachine `/status` now exposes scheduler-backed free slots and
+conservative memory headroom. It reports degraded/zero slots when no shared
+`PMachineScheduler` is configured; it does not invent an execution capacity.
+The CLI can opt in to a shared cooperative scheduler with
+`JS_PMACHINE_SCHEDULER_SLOTS=1..64`. The one-shot reporter accepts
+`PULSE_SWARM_RESOURCE_SOURCE=js-pmachine` and reads
+`PULSE_SWARM_SOURCE_URL` on the reporting host; the configured machine identity
+must match the source IP seen by the aggregator. This path was verified against
+a local JS PMachine and the authenticated HTTP endpoint. It does not configure a
+production scheduler or enroll any real node automatically.
+
+Each replica stores at most 256 blobs of 1..65536 bytes in a bounded append-only
+file. Incomplete final appends are removed on reopen; complete corrupt records
+fail closed. Write/sync failures disable that writer until reopen/reconciliation.
+Exclusive lock files prevent simultaneous local writers; an abandoned lock
+requires operator recovery, not automatic lock stealing. File flushes and
+process-restart recovery are tested on Windows; power-loss durability of newly
+created files/directories and the underlying storage must be qualified before
+production use. Two directories on one host are test replicas, not independent
+hardware failure domains. Retention/garbage collection is not implemented.
+
+A replication receipt proves stored bytes, **not an authoritative task commit**.
+The witness's `publish` operation now connects paired storage to authoritative
+checkpoint references: validate live leadership and expected task sequence,
+replicate the versioned task/code/state envelope to both managers, revalidate
+leadership and sequence after replication, then flush the witness commit record.
+Late replication cannot publish under a superseded epoch. Matching retries are
+idempotent; conflicting sequences or executable identities are rejected.
+`readCommitted` restores only witness-published data under live leadership and
+reports degraded storage explicitly. Leadership expiration during restore
+rejects the result. Publication and leadership sync failures have uncertain
+outcomes and require journal reopen/reconciliation before retry.
+
+The witness and task journals reuse
+[`durableRecordJournal.mjs`](src/backend/durableRecordJournal.mjs). Each is a
+bounded 32 MiB single-writer log; the witness retains at most 256 task checkpoint
+references. Witness storage is a separate authority, not a third payload replica
+or a multi-aggregator consensus system. Losing its authoritative journal must
+not trigger automatic initialization of a replacement witness for a live swarm:
+the constructor requires explicit `initialize: true` for first enrollment, and
+normal startup rejects an empty/missing journal.
+Operators must restore the journal or fence all previous participants before
+re-enrollment. Tokens contain identity/epoch facts, not authentication secrets.
+
+The witnessed admission facade now connects leadership to task lifecycle
+mutations. Its journal retains admission/lifecycle state, while the witness
+checkpoint journal is authoritative for recoverable application state.
+Admission's initial `checkpoint` field is not updated by witness publication:
+restore must use the facade's `restore`, not that initial admission state.
+Worker publication validates admission ownership synchronously immediately
+before the witness appends its commit, with no asynchronous gap between validation
+and append. This atomicity is scoped to one host process and one admission
+authority; a distributed admission store will need an equivalent transactional
+protocol. Direct witness `publish`/`readCommitted` remain privileged manager
+operations and must not be exposed to workers. The standalone task coordinator remains available
+for isolated tests and is not witness-gated unless its mutation hook is supplied.
+
+These modules are not yet connected to deployment routes or firmware ownership
+enforcement. Authenticated network adapters, distributed ownership transactions,
+transactional/deduplicated external effects and board checkpoint export/import
+remain required. This does not implement a transparent shared heap, arbitrary
+VM-state migration or Kotlin coroutine APIs. Poison notices are not yet delivered
+to boards, and cannot by themselves fence a partitioned former owner; every worker
+and effect receiver must reject stale leadership epochs for takeover to be safe.
+
+Run from this directory:
+
+```text
+npm run test:swarm:recovery
+```
+
+The tests cover resource freshness/health/bundle compatibility, paired-storage
+restart/integrity/failure behavior, witnessed
+leadership/commit fencing and task takeover/admission. Compiled Kotlin, C# and VB
+recovery uses application
+commit points across independent JavaScript worker schedulers, not ESP32 boards.
+
+An opt-in physical smoke test runs temporary signed Kotlin phases on an idle
+ESP32, publishes their application checkpoint through the paired stores/witness,
+simulates harness ownership loss, and resumes the committed phase on the JS
+PMachine. It does not flash firmware, install services, crash the board or verify
+firmware-side epochs. The harness provides fresh test resource reports and a
+SHA-256 for the bundled phases; this is not production bundle registration or
+automatic discovery/admission. PMachine and service-host idle checks bracket the
+test, and degraded device health is printed rather than classified as healthy.
+
+```powershell
+$env:PULSE_ESP32_TEST_URL = 'http://<selected-idle-board>'
+npm run test:swarm:esp32-js
+```
+
+Verified on the COM9 `camera` board and the JS runtime: one test passed, no skips.
+The board reported `low_heap`/degraded health; no hosted services were installed
+or changed. Recovery stores/witness ran on the host, not separate physical
+manager boards.
+
+The opt-in suite also reads actual board health and measured capacity into the
+resource registry, checking that degraded health is excluded rather than
+normalized to online. This read-only check does not enroll a production node.
+The earlier execution/recovery smoke deliberately uses harness candidates for
+bounded compatibility testing; it does not override the registry's production
+admission policy for degraded boards.
+
 ## Port-only LAN discovery
 
 Standalone lifecycle-aware services without `PULSE_AGGREGATOR_URLS` broadcast a

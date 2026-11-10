@@ -344,7 +344,7 @@ postfixUnarySuffix
 
 callSuffix
     : typeArguments? valueArguments lambdaLiteral?
-    | lambdaLiteral
+    | typeArguments? lambdaLiteral
     ;
 
 valueArguments
@@ -403,7 +403,7 @@ whenCondition
     ;
 
 tryExpression
-    : TRY block catchBlock* finallyBlock?
+    : TRY block NEWLINE* catchBlock* NEWLINE* finallyBlock?
     ;
 
 catchBlock
@@ -419,7 +419,7 @@ objectLiteral
     ;
 
 lambdaLiteral
-    : LBRACE (lambdaParameters ARROW)? statement* RBRACE
+    : LBRACE separators* (lambdaParameters ARROW separators*)? (statement separators*)* RBRACE
     ;
 
 lambdaParameters
@@ -615,7 +615,16 @@ MultiLineStringLiteral
     ;
 
 StringLiteral
-    : '"' ('\\' . | ~["\\\r\n])* '"'
+    : '"' ('\\' . | StringInterpolation | ~["\\\r\n])* '"'
+    ;
+
+fragment StringInterpolation
+    : '${' InterpolationContent '}'
+    ;
+
+fragment InterpolationContent
+    : (StringLiteral | CharacterLiteral | BlockComment | LineComment
+      | '{' InterpolationContent '}' | '\\' . | ~[{}"'\\])*
     ;
 
 CharacterLiteral

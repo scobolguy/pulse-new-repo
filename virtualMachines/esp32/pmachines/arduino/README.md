@@ -373,6 +373,15 @@ The ESP32-S3 N16R8 smoke run verified LittleFS replacement writes and typed
 unformatted persistence across independent VM invocations; it did not test
 SD/remote storage or certify the complete corpus.
 
+A physical ESP32-S3 N8R8 (firmware build Nov 9 2026) passed this device parity
+suite over HTTP, including `DOUBLE PRECISION` list-directed input. A separate
+hardware probe confirmed binary64 semantics on the same board: `1.000000000001D0`
+remains distinguishable from `1.D0` while the equivalent REAL rounds to binary32,
+`DSQRT(2.D0)**2-2.D0` is nonzero but below `1.D-15`, and
+`F20.16` prints `1.0000000000000002` exactly — byte-identical to the JS runtime.
+This is single-board evidence of binary64 support, not complete corpus
+certification; the deployment guards above remain in force.
+
 ## Pascalish legacy Kasa service
 
 The protocol implementation is [kasa-legacy-service.pas](../../src/kasa-legacy-service.pas).

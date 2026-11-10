@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { compileKotlinToPcode } from '../src/compile-kotlin-to-pcode.mjs';
-import { executeProgram, loadOpcodeMap, parsePcode } from '../../../virtualMachines/esp32/pmachines/javascript/index.mjs';
+import { createExecutionTarget, assertExecution } from './execution-targets.mjs';
 
 export async function readFixture(root, fixture) {
   const contents = await readFile(path.join(root, ...fixture.path.split('/')));
@@ -26,7 +26,7 @@ export function stripDiagnosticMarkers(source) {
   return { source: clean + source.slice(position), markers };
 }
 
-export async function runFixture(root, fixture) {
+export async function runFixture(root, fixture, executionTarget) {
   const original = await readFixture(root, fixture);
   if (fixture.kind === 'diagnostic') {
     const { source, markers } = stripDiagnosticMarkers(original);
@@ -46,19 +46,10 @@ export async function runFixture(root, fixture) {
     return;
   }
   const artifact = compileKotlinToPcode(`${original}\nfun main() { println(box()) }\n`, { fileName: fixture.path });
-  const mappingsById = new Map();
-  mappingsById.__globals = artifact.programMap.globals;
-  mappingsById.__proceduresByLabel = artifact.programMap.procedures;
-  const result = await executeProgram({
-    instructions: parsePcode(artifact.pcodeText),
-    opcodeMap: await loadOpcodeMap(),
-    mappingsById,
-    queueTypesByName: new Map(),
-    isoTypeIds: new Set(),
-    inputQueue: 'kotlin.upstream',
-    sourceMessage: '',
-    runtimeContext: { maxSteps: 100000, maxCallDepth: 64 }
-  });
-  assert.equal(result.error ?? null, null, `${fixture.path}: runtime error`);
-  assert.deepEqual(result.stdout, ['OK'], `${fixture.path}: box() did not return OK`);
+  const executor = executionTarget || await createExecutionTarget('js');
+  try {
+    assertExecution(await executor.execute(artifact), ['OK'], fixture.path);
+  } finally {
+    if (!executionTarget) await executor.stop();
+  }
 }

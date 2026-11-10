@@ -17,6 +17,12 @@ const hostFunctions = [
 ].map(([module, name, binding, parameterTypes, returnType]) => ({
   module, name, key: `Program.${name}`, label: `host.${binding}`, parameterTypes, returnType
 }));
+const standardLibraryFunctions = [
+  { name: 'assertEquals', key: 'Program.assertEquals', label: 'system.assert.equals',
+    parameterTypes: ['int', 'int'], returnType: 'void' },
+  { name: 'yield', key: 'Program.yield', label: 'system.coroutine.yield',
+    parameterTypes: [], returnType: 'void' }
+];
 
 export function compileKotlinToPcode(source, { fileName = 'program.kt', target = 'js', serviceId } = {}) {
   const program = parseKotlin(source, { fileName });
@@ -45,9 +51,16 @@ export function compileKotlinToPcode(source, { fileName = 'program.kt', target =
   }
   const artifact = compileScalarToPcode(program, source, {
     fileName, sourceLanguage: 'kotlin', target, service,
-    imports: service ? hostFunctions.filter(item =>
-      program.hostImports.includes(`importpulse.${item.module}.*`)
-      || program.hostImports.includes(`importpulse.${item.module}.${item.name}`)) : []
+    imports: [
+      ...(!service ? standardLibraryFunctions.filter(item =>
+        program.hostImports.includes('importkotlin.test.*')
+        || program.hostImports.includes('importkotlin.test.assertEquals')
+        || program.hostImports.includes('importkotlinx.coroutines.*')
+        || program.hostImports.includes('importkotlinx.coroutines.yield')) : []),
+      ...(service ? hostFunctions.filter(item =>
+        program.hostImports.includes(`importpulse.${item.module}.*`)
+        || program.hostImports.includes(`importpulse.${item.module}.${item.name}`)) : [])
+    ]
   });
   if (service && /^CALL_EXT (?!host\.)/m.test(artifact.pcodeText))
     throw new Error('Kotlin hosted services do not yet support scalar library calls such as integer division or integer-to-string conversion');

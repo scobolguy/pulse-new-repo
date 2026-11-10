@@ -528,7 +528,7 @@ bool ServiceHost::validateUnit(const JsonDocument& map, const char* kind, Unit& 
                 error = "Invalid hosted branch target"; return false;
             }
             break;
-        case OP_PUSH_STR: case OP_PUSH_INT: case OP_LOAD_NAME: case OP_STORE_NAME:
+        case OP_PUSH_STR: case OP_PUSH_INT: case OP_PUSH_NULL: case OP_LOAD_NAME: case OP_STORE_NAME:
         case OP_PRINT: case OP_PRINT_NL:
         case OP_MAP:
         case OP_RET: case OP_MAP_RETURN: case OP_HALT:

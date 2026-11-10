@@ -67,6 +67,8 @@ import { registerAllocatorRoutes } from './src/backend/roles/allocatorRoutes.mjs
 import { registerLibrarianProxyRoutes } from './src/backend/roles/librarianProxyRoutes.mjs';
 import { registerMapperProxyRoutes } from './src/backend/roles/mapperProxyRoutes.mjs';
 import { registerRuntimeRegistryRoutes } from './src/backend/roles/runtimeRegistryRoutes.mjs';
+import { registerSwarmResourceRoutes } from './src/backend/roles/swarmResourceRoutes.mjs';
+import { loadSwarmResourceConfiguration } from './src/backend/swarmResourceConfiguration.mjs';
 import { registerRouterLifecycleControlRoutes } from './src/backend/roles/routerLifecycleControlRoutes.mjs';
 import { registerHelloServiceRoutes } from './src/backend/roles/helloServiceRoutes.mjs';
 import { registerProvisioningAgentRoutes } from './src/backend/roles/provisioningAgentRoutes.mjs';
@@ -391,6 +393,7 @@ app.use(applyRequestSecurityHeaders);
 app.use(enforceHttpsTransport);
 app.use(enforceApiPermission);
 app.use(enforceTwoPersonRule);
+let swarmResourceRuntime = null;
 
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'gateway', environment: resolveEnvironmentName() });
@@ -9556,6 +9559,13 @@ const {
 });
 
 function registerRoutes(app) {
+  if (swarmResourceRuntime) {
+    registerSwarmResourceRoutes(app, {
+      resources: swarmResourceRuntime.resources,
+      machineAuth: swarmResourceRuntime.machineAuth,
+      logger: console,
+    });
+  }
   if (HOME_AUTOMATION_SERVICE_URL) {
     app.all('/api/home-automation/*splat', (req, res) => proxyRequest(req.method, req.originalUrl, req, res, HOME_AUTOMATION_SERVICE_URL));
     console.log(`[HOME-AUTOMATION] Proxying /api/home-automation/* to ${HOME_AUTOMATION_SERVICE_URL}`);
@@ -10214,6 +10224,22 @@ async function migratePersistedQueueTypeIds() {
 }
 
 try {
+  const swarmConfigPath = readEnvString('PULSE_SWARM_RESOURCE_CONFIG', '');
+  const machineCredentialsPath = readEnvString('PULSE_RUNTIME_MACHINE_AUTH_FILE', '');
+  const swarmOwnerId = readEnvString('PULSE_OWNER_AGGREGATOR_ID', '');
+  if (swarmConfigPath || machineCredentialsPath || swarmOwnerId) {
+    if (!swarmConfigPath || !machineCredentialsPath || !swarmOwnerId)
+      throw new Error('Swarm reporting requires resource config, machine credentials and owner aggregator id');
+    if (!REQUIRE_HTTPS)
+      throw new Error('Swarm machine resource reporting requires REQUIRE_HTTPS=true');
+    swarmResourceRuntime = await loadSwarmResourceConfiguration({
+      configPath: swarmConfigPath,
+      credentialsPath: machineCredentialsPath,
+      ownerAggregatorId: swarmOwnerId,
+      logger: console,
+    });
+    console.log(`[SWARM-RESOURCES] Authenticated resource reporting enabled for ${swarmResourceRuntime.clusterId}`);
+  }
   await migratePersistedQueueTypeIds().catch(error => {
     console.warn(`[TYPE-IDS] Queue type migration unavailable: ${error.message}`);
   });

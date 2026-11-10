@@ -3,6 +3,7 @@ import { fail } from './source-diagnostics.mjs';
 import { analyze } from './scalar-semantics.mjs';
 import { SYSTEM_LIBRARY } from './system-library.mjs';
 import { isInteger } from './integer-types.mjs';
+import { PMACHINE_ABI } from '../../virtualMachines/esp32/pmachines/shared/p-machine-abi.mjs';
 
 export function compileScalarToPcode(program, source, {
   fileName, sourceLanguage, checkedArithmetic = false, imports = [], target = 'js', service = null
@@ -61,7 +62,7 @@ export function compileScalarToPcode(program, source, {
   }
   function operation(op, leftType, rightType, token, checked = checkedArithmetic) {
     if (op === '/' || op === '%') {
-      emit(`CALL_EXT system.int32.${op === '/' ? 'divide' : 'remainder'} 2`, token);
+      emit(`CALL_EXT system.int32.${op === '/' ? 'divide' : 'remainder'}${sourceLanguage === 'kotlin' ? '.unchecked' : ''} 2`, token);
       return;
     }
     if (op === 'concat' || op === '+' && (leftType === 'string' || rightType === 'string')) {
@@ -83,13 +84,92 @@ export function compileScalarToPcode(program, source, {
   function expression(node) {
     const token = node.token;
     if (Object.hasOwn(node, 'constant')) {
-      emit(node.valueType === 'string' ? `PUSH_STR ${JSON.stringify(node.constant)}`
+      if (node.valueType === 'null' || node.nullLiteral) emit('PUSH_NULL', token);
+      else emit(node.valueType === 'string' ? `PUSH_STR ${JSON.stringify(node.constant)}`
         : `PUSH_INT ${node.valueType === 'bool' ? Number(node.constant) : node.constant}`, token);
       return;
     }
     switch (node.kind) {
       case 'name': emit(`LOAD_NAME ${node.variable.slot}`, token); break;
+      case 'object-value': emit('PUSH_INT 1', token); break;
+      case 'field-get':
+        emit(`LOAD_NAME ${context.selfSlot}`, token);
+        emit(`PUSH_INT ${node.index}`, token);
+        emit('CALL_EXT object.get 2', token);
+        break;
+      case 'field-set':
+        emit(`LOAD_NAME ${context.selfSlot}`, token);
+        emit(`PUSH_INT ${node.index}`, token);
+        expression(node.value);
+        emit('CALL_EXT object.set 3', token);
+        emit(`STORE_NAME ${temporary()}`, token);
+        break;
+      case 'array-new':
+        expression(node.length);
+        emit('CALL_EXT object.new 1', token);
+        break;
+      case 'index-get':
+        expression(node.receiver);
+        expression(node.index);
+        emit('CALL_EXT object.get 2', token);
+        break;
+      case 'property': {
+        if (node.arraySize) {
+          expression(node.receiver);
+          emit('CALL_EXT object.length 1', token);
+          break;
+        }
+        let skip = null;
+        if (node.safe) {
+          skip = fresh('SAFE_PROPERTY_SKIP');
+          const receiver = temporary();
+          expression(node.receiver);
+          emit(`STORE_NAME ${receiver}`, token);
+          emit(`LOAD_NAME ${receiver}`, token);
+          emit(`JZ ${skip}`, token);
+          emit(`LOAD_NAME ${receiver}`, token);
+        } else expression(node.receiver);
+        const instance = instantiate(node.method, node.genericTypes.map(concrete));
+        emit(`CALL ${instance.label} 1`, token);
+        if (skip) {
+          const end = fresh('SAFE_PROPERTY_END');
+          emit(`JMP ${end}`, token);
+          emit(`${skip}:`, token);
+          emit('PUSH_NULL', token);
+          emit(`${end}:`, token);
+        }
+        break;
+      }
+      case 'string-length':
+        expression(node.value); emit('CALL_EXT system.string.length 1', token);
+        break;
+      case 'scalar-string': asString(node.value); break;
+      case 'range-test': {
+        const slots = [node.start, node.end, node.value].map(operand => {
+          expression(operand);
+          const slot = temporary();
+          emit(`STORE_NAME ${slot}`, operand.token);
+          return slot;
+        });
+        emit(`LOAD_NAME ${slots[2]}`, token); emit(`LOAD_NAME ${slots[0]}`, token); emit('GE', token);
+        emit(`LOAD_NAME ${slots[2]}`, token); emit(`LOAD_NAME ${slots[1]}`, token);
+        emit(node.exclusive ? 'LT' : 'LE', token); emit('AND', token);
+        if (node.negated) emit('NOT', token);
+        break;
+      }
       case 'overflow': expression(node.value); break;
+      case 'not-null':
+        expression(node.value);
+        emit('CALL_EXT system.reference.notnull 1', token);
+        break;
+      case 'throw':
+        expression(node.value);
+        const thrown = temporary();
+        emit(`STORE_NAME ${thrown}`, token);
+        for (const finalizer of [...context.finallyStack].reverse()) statement(finalizer);
+        emit(`LOAD_NAME ${thrown}`, token);
+        emit('CALL_EXT system.exception.throw 1', token);
+        break;
       case 'convert':
         if (node.conversion === 'scalar-to-string') asString(node.value);
         else {
@@ -113,6 +193,34 @@ export function compileScalarToPcode(program, source, {
         if (node.op === '!') emit('NOT', token);
         break;
       case 'binary':
+        if (node.op === '..' || node.op === '..<') {
+          expression(node.left); emit(`STORE_NAME ${temporary()}`, node.left.token);
+          if (node.left.kind === 'index-get') {
+            expression(node.left.receiver);
+            expression(node.left.index);
+            expression(node.right);
+            emit('CALL_EXT object.set 3', token);
+            emit(`STORE_NAME ${temporary()}`, token);
+            break;
+          }
+          expression(node.right); emit(`STORE_NAME ${temporary()}`, node.right.token);
+          break;
+        }
+        if (node.op === '?:') {
+          const fallback = fresh('ELVIS_FALLBACK');
+          const end = fresh('ELVIS_END');
+          const value = temporary();
+          expression(node.left);
+          emit(`STORE_NAME ${value}`, node.left.token);
+          emit(`LOAD_NAME ${value}`, node.left.token);
+          emit(`JZ ${fallback}`, node.token);
+          emit(`LOAD_NAME ${value}`, node.left.token);
+          emit(`JMP ${end}`, node.token);
+          emit(`${fallback}:`, node.token);
+          expression(node.right);
+          emit(`${end}:`, node.token);
+          break;
+        }
         if (node.op === '&&' || node.op === '||') {
           const alternative = fresh('LOGICAL'), end = fresh('LOGICAL_END');
           expression(node.left);
@@ -131,6 +239,33 @@ export function compileScalarToPcode(program, source, {
         }
         break;
       case 'assign': {
+        if (node.left.kind === 'index-get') {
+          if (node.op === '=') {
+            expression(node.left.receiver);
+            expression(node.left.index);
+            expression(node.right);
+          } else {
+            // Compound assignment reads the current element once, with the
+            // receiver and index each evaluated exactly once.
+            const receiver = temporary(), index = temporary();
+            expression(node.left.receiver);
+            emit(`STORE_NAME ${receiver}`, token);
+            expression(node.left.index);
+            emit(`STORE_NAME ${index}`, token);
+            emit(`LOAD_NAME ${receiver}`, token);
+            emit(`LOAD_NAME ${index}`, token);
+            emit(`LOAD_NAME ${receiver}`, token);
+            emit(`LOAD_NAME ${index}`, token);
+            emit('CALL_EXT object.get 2', token);
+            expression(node.right);
+            operation(node.op[0], node.operationType || concrete(node.left.valueType),
+              node.operationType || concrete(node.right.valueType), token, node.checkedArithmetic);
+            if (node.assignmentConversion) integerConversion(node.assignmentConversion, node.checkedArithmetic, token);
+          }
+          emit('CALL_EXT object.set 3', token);
+          emit(`STORE_NAME ${temporary()}`, token);
+          break;
+        }
         if (node.op !== '=') emit(`LOAD_NAME ${node.left.variable.slot}`, token);
         if (node.op === '+=' && node.valueType === 'string') asString(node.right);
         else expression(node.right);
@@ -168,10 +303,30 @@ export function compileScalarToPcode(program, source, {
           }
           if (node.consoleName.endsWith('WriteLine')) emit('PRINT_NL', token);
         } else {
+          let skip = null;
+          if (node.safe) {
+            const receiver = temporary();
+            skip = fresh('SAFE_CALL_SKIP');
+            expression(node.receiver);
+            emit(`STORE_NAME ${receiver}`, token);
+            emit(`LOAD_NAME ${receiver}`, token);
+            emit(`JZ ${skip}`, token);
+          }
+          if (node.receiver && node.method.instance) expression(node.receiver);
           node.args.forEach(expression);
           const instance = instantiate(node.method, node.genericTypes.map(concrete));
-          const opcode = node.method.external?.startsWith('host.') ? 'CALL_EXT' : 'CALL';
-          emit(`${opcode} ${instance.label} ${node.args.length}`, token);
+          const opcode = node.method.external?.startsWith('host.')
+            || node.method.external?.startsWith('system.') ? 'CALL_EXT' : 'CALL';
+          emit(`${opcode} ${instance.label} ${node.args.length + (node.method.instance ? 1 : 0)}`, token);
+          if (skip) {
+            if (node.valueType !== 'void') {
+              const end = fresh('SAFE_CALL_END');
+              emit(`JMP ${end}`, token);
+              emit(`${skip}:`, token);
+              emit('PUSH_NULL', token);
+              emit(`${end}:`, token);
+            } else emit(`${skip}:`, token);
+          }
         }
         break;
       default: throw new Error(`C# internal error: unhandled expression '${node.kind}'`);
@@ -194,7 +349,15 @@ export function compileScalarToPcode(program, source, {
         }
         break;
       case 'expressions': node.values.forEach(discard); break;
+      case 'try':
+        if (node.finallyBody) context.finallyStack.push(node.finallyBody);
+        statement(node.body);
+        if (node.finallyBody) context.finallyStack.pop();
+        for (const handler of node.catches) statement(handler.body);
+        if (node.finallyBody) statement(node.finallyBody);
+        break;
       case 'return':
+        for (const finalizer of [...context.finallyStack].reverse()) statement(finalizer);
         if (node.value) expression(node.value);
         emit('RET', token);
         break;
@@ -215,14 +378,24 @@ export function compileScalarToPcode(program, source, {
           expression(node.condition); emit(`JZ ${end}`, token);
         }
         statement(node.body); emit(`${next}:`, token);
+        if (node.inclusiveRange) {
+          expression(node.condition.left); expression(node.condition.right);
+          emit('EQ', token); emit('NOT', token); emit(`JZ ${end}`, token);
+        }
         if (node.increment) node.increment.forEach(discard);
         if (node.kind === 'do') { expression(node.condition); emit(`JZ ${end}`, token); }
         emit(`JMP ${start}`, token); emit(`${end}:`, token);
         context.loops.pop();
         break;
       }
-      case 'break': emit(`JMP ${context.loops.at(-1).end}`, token); break;
-      case 'continue': emit(`JMP ${context.loops.at(-1).next}`, token); break;
+      case 'break':
+        for (const finalizer of [...context.finallyStack].reverse()) statement(finalizer);
+        emit(`JMP ${context.loops.at(-1).end}`, token);
+        break;
+      case 'continue':
+        for (const finalizer of [...context.finallyStack].reverse()) statement(finalizer);
+        emit(`JMP ${context.loops.at(-1).next}`, token);
+        break;
       default: throw new Error(`C# internal error: unhandled statement '${node.kind}'`);
     }
   }
@@ -233,6 +406,7 @@ export function compileScalarToPcode(program, source, {
   for (const method of methods.values()) if (!method.typeParams.length) instantiate(method, []);
   for (let index = 0; index < pending.length; index++) {
     const instance = pending[index], { method, bindings, label } = instance;
+    const selfSlot = method.instance ? method.params[0]?.variable.slot : null;
     const metadata = {
       label,
       name: method.key, signature: method.signature, params: method.params.map(param => param.variable.slot),
@@ -245,9 +419,29 @@ export function compileScalarToPcode(program, source, {
         .map(variable => ({ ...variable, type: bindings.get(variable.type) || variable.type }))
     };
     procedures[label] = metadata;
-    context = { bindings, metadata, temporary: 0, loops: [] };
+    context = { bindings, metadata, temporary: 0, loops: [], finallyStack: [], selfSlot };
     emit(`${label}:`, method.token);
-    statement(method.body);
+    if (method.constructorType && method.fields?.length) {
+      emit(`PUSH_INT ${method.fields.length}`, method.token);
+      emit('CALL_EXT object.new 1', method.token);
+      const objectSlot = temporary();
+      emit(`STORE_NAME ${objectSlot}`, method.token);
+      method.params.forEach((param, index) => {
+        emit(`LOAD_NAME ${objectSlot}`, param.token);
+        emit(`PUSH_INT ${index}`, param.token);
+        emit(`LOAD_NAME ${param.variable.slot}`, param.token);
+        emit('CALL_EXT object.set 3', param.token);
+        emit(`STORE_NAME ${temporary()}`, param.token);
+      });
+      for (const field of method.fieldInitializers || []) {
+        emit(`LOAD_NAME ${objectSlot}`, field.value.token);
+        emit(`PUSH_INT ${field.index}`, field.value.token);
+        expression(field.value);
+        emit('CALL_EXT object.set 3', field.value.token);
+        emit(`STORE_NAME ${temporary()}`, field.value.token);
+      }
+      emit(`LOAD_NAME ${objectSlot}`, method.token);
+    } else statement(method.body);
     emit('RET', method.token);
   }
   emit('MAIN:', entry.token);
@@ -290,6 +484,7 @@ export function compileScalarToPcode(program, source, {
       globals: service?.dispatchEndpoints ? ['__service_response', '__service_discard']
         : entry.returnType.name === 'int' ? ['CS_EXIT_CODE'] : [], procedures, entries: [], sourceMap,
       libraries: [{ id: SYSTEM_LIBRARY.id, version: SYSTEM_LIBRARY.version }],
+      pmachineAbi: PMACHINE_ABI,
       target, targets: service ? ['js', 'esp32'] : [target], abi: { id: 'pulse.scalar', version: 1 },
       ...(service ? service.contract : {})
     }

@@ -82,6 +82,21 @@ bool sendNodeBeaconAnnouncement(
 #if defined(ESP32) && defined(ENABLE_PMACHINE) && !defined(DISABLE_PMACHINE_ROUTES)
     JsonArray capabilities = announceDoc["capabilities"].to<JsonArray>();
     capabilities.add("pascalish-dag-v1");
+    capabilities.add("pmachine-pcode-v1");
+    JsonObject pmachine = announceDoc["pmachine"].to<JsonObject>();
+    pmachine["available"] = true;
+    pmachine["protocol"] = "pcode-v1";
+    pmachine["abi"] = "pulse.pmachine";
+    pmachine["abiVersion"] = 1;
+    pmachine["opcodeManifestVersion"] = 1;
+    JsonArray features = pmachine["features"].to<JsonArray>();
+    features.add("scalar");
+    features.add("coroutine.yield");
+    features.add("null.value");
+    features.add("reference.heap");
+    pmachine["endpoint"] = "/pmachine/execute_json";
+    JsonArray runtimes = pmachine["runtimes"].to<JsonArray>();
+    runtimes.add("pcode");
     JsonObject dagWorker = announceDoc["dagWorker"].to<JsonObject>();
     dagWorker["protocol"] = "pascalish-dag-v1";
     dagWorker["maxConcurrentTasks"] = 1;

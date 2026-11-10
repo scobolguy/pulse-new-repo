@@ -40,6 +40,7 @@ struct Value {
 
     bool isDecimal() const { return kind == ValueKind::DecimalRef; }
     bool isReference() const { return kind == ValueKind::Reference; }
+    bool isNull() const { return kind == ValueKind::Reference && handle == 0 && (flags & 0x01) != 0; }
 
     static Value makeString(uint16_t poolHandle) {
         Value v;
@@ -79,6 +80,10 @@ struct Value {
         v.flags = referenceFlags;
         v.i = 0;
         return v;
+    }
+
+    static Value makeNull() {
+        return makeReference(0, 0x01);
     }
 
     bool isDouble() const { return kind == ValueKind::Double; }

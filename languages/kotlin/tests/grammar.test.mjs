@@ -52,6 +52,7 @@ async function parse(sources) {
 
 test('accepts supported Kotlin samples and rejects malformed source', async t => {
   const diagnostics = await parse({
+    'valid-templates.kt': 'fun main() { println("nested ${"value ${42}"} and ${"}"}") }\n',
     'valid-core.kt': `
     package demo.app
     import kotlin.math.abs
@@ -107,6 +108,9 @@ test('accepts supported Kotlin samples and rejects malformed source', async t =>
   });
   await t.test('parses packages, imports, declarations, generics, control flow and lambdas', () => {
     assert.doesNotMatch(diagnostics, /valid-core\.kt:\d+:\d+:/);
+  });
+  await t.test('parses nested quoted template expressions through the grammar', () => {
+    assert.doesNotMatch(diagnostics, /valid-templates\.kt:\d+:\d+:/);
   });
   await t.test('parses nullable types, inheritance, companion objects and try expressions', () => {
     assert.doesNotMatch(diagnostics, /valid-advanced\.kt:\d+:\d+:/);

@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { setImmediate as nextTurn, setTimeout as delay } from 'node:timers/promises';
-import { PMachineScheduler, PMachineMemory, parsePcode } from '../../pmachines/javascript/index.mjs';
+import { PMachineScheduler, PMachineMemory, parsePcode, loadOpcodeMap } from '../../pmachines/javascript/index.mjs';
 import { createPascalishServiceHost } from '../../pmachines/javascript/src/service-host.mjs';
 import { compileCobolishToPcode } from '../../../../languages/cobolish85/src/compile-cobolish-to-pcode.mjs';
 import { createJsPmachineNodeServer } from '../../pmachines/javascript/server.mjs';
+import { compileKotlinToPcode } from '../../../../languages/kotlin/src/compile-kotlin-to-pcode.mjs';
+import { compileCsharpToPcode } from '../../../../languages/csharp/src/compile-csharp-to-pcode.mjs';
+import { compileVb11ToPcode } from '../../../../languages/vbish/src/compile-vb11.mjs';
 
 function deferred() {
   let resolve, reject;
@@ -15,6 +18,101 @@ function deferred() {
 const options = (pcode, runtimeContext = {}, programMap = {}) => ({
   instructions: parsePcode(pcode), opcodeMap: new Map(), programMap, runtimeContext, debugLogger() {},
 });
+function compiledOptions(artifact, opcodeMap, runtimeContext = {}) {
+  const mappingsById = new Map();
+  mappingsById.__globals = artifact.programMap.globals;
+  mappingsById.__proceduresByLabel = artifact.programMap.procedures;
+  return {
+    ...options(artifact.pcodeText, { maxSteps: 100000, maxCallDepth: 64, ...runtimeContext }, artifact.programMap),
+    mappingsById, opcodeMap,
+  };
+}
+
+test('compiled Kotlin, C# and VB share one slot with fair progress and isolated procedure state', async () => {
+  const scheduler = new PMachineScheduler({ slots: 1, quantum: 8 });
+  const opcodeMap = await loadOpcodeMap();
+  const programs = [
+    ['kotlin', compileKotlinToPcode(`fun increment(value: Int, amount: Int = 1): Int = value + amount
+fun main() {
+  var total = 0
+  for (value in 1..500) { total = increment(total) }
+  println(total)
+}`), '500'],
+    ['csharp', compileCsharpToPcode(`using System;
+class Program {
+  static int Increment(int value) { return value + 2; }
+  static void Main() {
+    int total = 0;
+    for (int value = 0; value < 50; value++) { total = Increment(total); }
+    Console.WriteLine(total);
+  }
+}`), '100'],
+    ['vb', compileVb11ToPcode(`Imports System
+Module Program
+  Function Increment(value As Integer) As Integer
+    Return value + 3
+  End Function
+  Sub Main()
+    Dim total As Integer = 0
+    For value As Integer = 1 To 25
+      total = Increment(total)
+    Next
+    Console.WriteLine(total)
+  End Sub
+End Module`), '75'],
+  ];
+  const order = [];
+  await Promise.all(programs.map(async ([name, artifact, expected]) => {
+    const result = await scheduler.execute(compiledOptions(artifact, opcodeMap), { name });
+    assert.equal(result.error ?? null, null);
+    assert.equal(result.stepLimitHit, false);
+    assert.deepEqual(result.stdout, [expected], name);
+    order.push(name);
+  }));
+  assert.equal(order.at(-1), 'kotlin');
+  const status = scheduler.getStatus();
+  assert.ok(status.yields > 0);
+  assert.equal(status.completed, 3);
+  assert.equal(status.failed, 0);
+  assert.equal(status.active, 0);
+  assert.deepEqual(status.contexts, []);
+});
+
+test('cancelling CPU-bound Kotlin does not cancel C# or VB on the shared scheduler', async () => {
+  const scheduler = new PMachineScheduler({ slots: 1, quantum: 8 });
+  const opcodeMap = await loadOpcodeMap();
+  const controller = new AbortController();
+  const looping = compileKotlinToPcode('fun main() { while (true) {} }');
+  const work = scheduler.execute(compiledOptions(looping, opcodeMap, {
+    signal: controller.signal, maxSteps: 200000,
+  }), { name: 'kotlin-cancel' });
+  const cancelled = assert.rejects(work, /cancel Kotlin only/);
+  try {
+    const programs = [
+      compileCsharpToPcode('using System; class Program { static void Main() { Console.WriteLine(42); } }'),
+      compileVb11ToPcode('Imports System\nModule Program\nSub Main()\nConsole.WriteLine(42)\nEnd Sub\nEnd Module'),
+    ];
+    for (const result of await Promise.all(programs.map(artifact =>
+      scheduler.execute(compiledOptions(artifact, opcodeMap))))) {
+      assert.equal(result.error ?? null, null);
+      assert.equal(result.stepLimitHit, false);
+      assert.deepEqual(result.stdout, ['42']);
+    }
+    assert.equal(scheduler.getStatus().contexts.length, 1);
+  } finally {
+    controller.abort(new Error('cancel Kotlin only'));
+    await cancelled;
+  }
+  const recovered = await scheduler.execute(compiledOptions(
+    compileKotlinToPcode('fun main() { println(7) }'), opcodeMap));
+  assert.deepEqual(recovered.stdout, ['7']);
+  assert.equal(recovered.error ?? null, null);
+  assert.equal(recovered.stepLimitHit, false);
+  assert.equal(scheduler.getStatus().completed, 3);
+  assert.equal(scheduler.getStatus().failed, 1);
+  assert.deepEqual(scheduler.getStatus().contexts, []);
+});
+
 const waitingProgram = `
 JMP MAIN
 QUERY:

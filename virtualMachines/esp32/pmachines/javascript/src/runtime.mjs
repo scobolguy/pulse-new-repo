@@ -15,6 +15,7 @@ import { ManagedObjects, ObjectRef } from './managed-objects.mjs';
 import { SYSTEM_LIBRARY, executeSystemIntrinsic } from '../../../../../languages/dotnet/system-library.mjs';
 import { createFortranState, executeFortranIntrinsic } from '../../../../../languages/mnf/runtime/fortran-library.mjs';
 import { isFortranIoIntrinsic, executeFortranIoIntrinsic } from '../../../../../languages/mnf/runtime/fortran-io.mjs';
+import { validatePmachineAbi } from '../../shared/p-machine-abi.mjs';
 
 function parseArgs(argv) {
   const args = {
@@ -1267,7 +1268,14 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
         const argc = instr.operand?.argc;
         if (argc !== SYSTEM_LIBRARY.intrinsics[name].arity || stack.length < argc)
           throw new Error(`Invalid System intrinsic call: ${name}`);
-        stack.push(executeSystemIntrinsic(name, stack.splice(stack.length - argc, argc)));
+        if (name === 'system.coroutine.yield' && executionSlot) {
+          stack.splice(stack.length - argc, argc);
+          await executionSlot.checkpoint({ pc, stepCount: steps });
+          pc += 1;
+          continue;
+        }
+        const value = executeSystemIntrinsic(name, stack.splice(stack.length - argc, argc));
+        if (value !== undefined) stack.push(value);
         pc += 1;
         continue;
       }
@@ -1342,6 +1350,11 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       pc += 1;
       continue;
     }
+    if (op === 'PUSH_NULL') {
+      stack.push(null);
+      pc += 1;
+      continue;
+    }
     if (op === 'PUSH_STR') {
       stack.push(String(instr.operand || ''));
       pc += 1;
@@ -1364,7 +1377,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       const varName = applyWithContext(rawName, withContextStack);
       const varValue = resolveVar(currentFrame, varName);
       // Preserve strings (src, or values stored via MSG_WITH_PUSH / PUSH_STR), reals and enums.
-      if (isBoxed(varValue) || typeof varValue === 'string') {
+      if (varValue === null || isBoxed(varValue) || isReference(varValue) || typeof varValue === 'string') {
         stack.push(varValue);
       } else {
         stack.push(Number(varValue || 0));
@@ -1376,7 +1389,8 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       const rawName = String(instr.operand || '');
       const varName = applyWithContext(rawName, withContextStack);
       const top = stack.pop();
-      const stored = isBoxed(top) || typeof top === 'string' ? top : Number(top || 0);
+      const stored = top === null || isBoxed(top) || isReference(top) || typeof top === 'string'
+        ? top : Number(top || 0);
       assignVar(currentFrame, varName, stored);
       pc += 1;
       continue;
@@ -1603,6 +1617,13 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
     if (op === 'EQ' || op === 'NEQ' || op === 'LT' || op === 'LE' || op === 'GT' || op === 'GE') {
       const rawB = stack.pop();
       const rawA = stack.pop();
+      if (rawA === null || rawB === null) {
+        if (op !== 'EQ' && op !== 'NEQ') throw new TypeError('null values only support equality comparisons');
+        const equal = rawA === null && rawB === null;
+        stack.push((op === 'EQ' ? equal : !equal) ? 1 : 0);
+        pc += 1;
+        continue;
+      }
       if (rawA instanceof ObjectRef || rawB instanceof ObjectRef) {
         if (op !== 'EQ' && op !== 'NEQ') throw new TypeError('objects only support equality comparisons');
         stack.push((op === 'EQ' ? rawA === rawB : rawA !== rawB) ? 1 : 0);
@@ -1803,14 +1824,16 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       for (let i = 0; i < Number(call.argc || 0); i += 1) {
         // Boxed values must survive the call boundary intact.
         const raw = stack.pop();
-        args.push(isBoxed(raw) || isReference(raw) || typeof raw === 'string' ? raw : Number(raw || 0));
+        args.push(raw === null || isBoxed(raw) || isReference(raw) || typeof raw === 'string'
+          ? raw : Number(raw || 0));
       }
       args.reverse();
 
       const vars = {};
       for (let i = 0; i < (proc.params || []).length; i += 1) {
         const value = args[i];
-        vars[String(proc.params[i])] = isBoxed(value) || isReference(value) || typeof value === 'string' ? value : Number(value || 0);
+        vars[String(proc.params[i])] = value === null || isBoxed(value) || isReference(value)
+          || typeof value === 'string' ? value : Number(value || 0);
       }
       for (const localName of (proc.locals || [])) {
         if (!Object.prototype.hasOwnProperty.call(vars, localName)) vars[String(localName)] = 0;
@@ -2652,6 +2675,7 @@ async function executeSingleMessage(args, { printOutput = true, scheduler = null
 }
 
 export async function executeProgram(options) {
+  validatePmachineAbi(options?.programMap?.pmachineAbi);
   const debugLogger = typeof options?.debugLogger === 'function' ? options.debugLogger : dslDebug;
   const executionOptions = options?.programMap && !options?.mappingsById
     ? { ...options, mappingsById: parseProgramMapMappings(options.programMap) }
