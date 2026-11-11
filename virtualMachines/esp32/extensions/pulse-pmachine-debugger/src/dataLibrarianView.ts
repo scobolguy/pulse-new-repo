@@ -2,6 +2,33 @@ import * as vscode from 'vscode';
 import { DataMapperBackend, LibrarianSchema, structurePending } from './dataMapperBackend.js';
 import { Field, fieldsOf } from './dataMapperModel.js';
 
+function directLibrarianUrl(baseUrl: string): string | undefined {
+  const url = new URL(baseUrl);
+  if (url.hostname !== '127.0.0.1' && url.hostname !== 'localhost') return undefined;
+  if (url.port !== '4000') return undefined;
+  url.port = '4300';
+  return url.toString().replace(/\/+$/, '');
+}
+
+async function directSchemas(baseUrl: string): Promise<LibrarianSchema[] | undefined> {
+  const directBase = directLibrarianUrl(baseUrl);
+  if (!directBase) return undefined;
+  const response = await fetch(`${directBase}/api/librarian/schemas`, { signal: AbortSignal.timeout(60000) });
+  const data = await response.json().catch(() => ({})) as { schemas?: unknown };
+  if (!response.ok) throw new Error(`Direct Librarian request failed (HTTP ${response.status})`);
+  if (!Array.isArray(data.schemas)) throw new Error('Direct Librarian returned an invalid schemas list.');
+  return data.schemas as LibrarianSchema[];
+}
+
+async function directSchemaStructure(baseUrl: string, path: string): Promise<{ structure: unknown; mtime?: string } | undefined> {
+  const directBase = directLibrarianUrl(baseUrl);
+  if (!directBase) return undefined;
+  const response = await fetch(`${directBase}/api/librarian/schema-structure?path=${encodeURIComponent(path)}`, { signal: AbortSignal.timeout(60000) });
+  const data = await response.json().catch(() => ({})) as { structure?: unknown; mtime?: unknown };
+  if (!response.ok) throw new Error(`Direct Librarian structure request failed (HTTP ${response.status})`);
+  return { structure: data.structure ?? null, ...(typeof data.mtime === 'string' ? { mtime: data.mtime } : {}) };
+}
+
 export class LibrarianItem extends vscode.TreeItem {
   constructor(label: string, readonly schema?: LibrarianSchema, readonly fields: Field[] = [], readonly field?: Field,
     readonly baseUrl?: string) {
@@ -23,10 +50,12 @@ export class DataLibrarianViewProvider implements vscode.TreeDataProvider<Librar
   readonly onDidChangeTreeData = this.changes.event;
 
   private readonly loaded = new Map<string, LibrarianSchema>();
+  private rootItems: LibrarianItem[] | undefined;
+  private rootLoading = false;
 
   constructor(private readonly output: vscode.OutputChannel) {}
 
-  refresh(): void { this.loaded.clear(); this.changes.fire(undefined); }
+  refresh(): void { this.loaded.clear(); this.rootItems = undefined; this.rootLoading = false; this.changes.fire(undefined); }
   dispose(): void { this.changes.dispose(); }
   getTreeItem(item: LibrarianItem): vscode.TreeItem { return item; }
 
@@ -36,12 +65,42 @@ export class DataLibrarianViewProvider implements vscode.TreeDataProvider<Librar
     const cached = this.loaded.get(item.schema.path);
     if (cached) return cached;
     const base = item.baseUrl ?? vscode.workspace.getConfiguration('pulse-pmachine').get<string>('backendUrl', 'http://127.0.0.1:4000');
-    const schema = await new DataMapperBackend(base).schemaWithStructure(item.schema);
+    let schema: LibrarianSchema;
+    let directStructure: { structure: unknown; mtime?: string } | undefined;
+    try {
+      directStructure = await directSchemaStructure(base, item.schema.path);
+    } catch {
+      directStructure = undefined;
+    }
+    if (directStructure) {
+      schema = { ...item.schema, structure: directStructure.structure, structureLoaded: true, ...(directStructure.mtime ? { mtime: directStructure.mtime } : {}) };
+    } else {
+      schema = await new DataMapperBackend(base).schemaWithStructure(item.schema);
+    }
     this.loaded.set(schema.path, schema);
     return schema;
   }
 
   async getChildren(item?: LibrarianItem): Promise<LibrarianItem[]> {
+    if (!item) {
+      if (this.rootItems) return this.rootItems;
+      if (this.rootLoading) return [new LibrarianItem('Loading Data Librarian...')];
+      this.rootLoading = true;
+      void this.loadChildren().then(items => {
+        this.rootItems = items;
+        this.rootLoading = false;
+        this.changes.fire(undefined);
+      }, error => {
+        this.rootItems = [new LibrarianItem(`Data Librarian unavailable - ${error instanceof Error ? error.message : String(error)}`)];
+        this.rootLoading = false;
+        this.changes.fire(undefined);
+      });
+      return [new LibrarianItem('Loading Data Librarian...')];
+    }
+    return this.loadChildren(item);
+  }
+
+  private async loadChildren(item?: LibrarianItem): Promise<LibrarianItem[]> {
     if (item) {
       if (!item.schema) return [];
       let schema = item.schema;
@@ -67,7 +126,17 @@ export class DataLibrarianViewProvider implements vscode.TreeDataProvider<Librar
     if (!vscode.workspace.isTrusted) return [new LibrarianItem('Trust this workspace to browse Librarian schemas')];
     try {
       const base = vscode.workspace.getConfiguration('pulse-pmachine').get<string>('backendUrl', 'http://127.0.0.1:4000');
-      const schemas: LibrarianSchema[] = await new DataMapperBackend(base).schemas();
+      let schemas: LibrarianSchema[] | undefined;
+      try {
+        schemas = await directSchemas(base);
+      } catch {
+        schemas = undefined;
+      }
+      if (schemas) {
+        this.output.appendLine('Data Librarian: using direct local service on port 4300.');
+      } else {
+        schemas = await new DataMapperBackend(base).schemas();
+      }
       return schemas.length
         ? schemas.sort((left, right) => (left.name || left.path).localeCompare(right.name || right.path))
           .map(schema => {

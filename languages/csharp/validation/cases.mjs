@@ -152,7 +152,7 @@ export const CASES = [
     feature: 'numeric', suite: 'numeric'
   },
   unsupported('CS-UNSUPPORTED-011', '6.5', '#define FEATURE\nclass P { static void Main() {} }', 'Unsupported character'),
-  unsupported('CS-UNSUPPORTED-012', '8.2.4; 15.11', 'class P { public P() {} static void Main() {} }', 'Only static methods'),
+  unsupported('CS-UNSUPPORTED-012', '8.2.4; 15.6', 'class P { void F() {} static void Main() {} }', 'Only static methods'),
   ...EXTENDED_CASES,
   ...OVERLOAD_CASES,
   ...NUMERIC_CASES,

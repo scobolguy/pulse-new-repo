@@ -400,6 +400,18 @@ configured HTTP/HTTPS endpoint in your browser. The view uses
 `pulse-pmachine.backendUrl` and refreshes when that setting changes. Request
 failures are reported in the view, a notification, and the `Pulse PMachine` output.
 
+### Pulse Connections
+
+The **Pulse Connections** Explorer view keeps workspace setup separate from
+runtime discovery. It always lists the built-in connection types for Message
+Broker, Database, Data Librarian, Code Librarian, Mapper Librarian, Gateway,
+Discovery, Data Mapper, Filesystem, and Queue Manager. An unconfigured entry is
+shown as **(not defined)**. Right-click it and choose **Pulse: Create Connection
+String** to enter a DNS name or IP address, port, and protocol. Definitions are
+stored in the workspace `pulse-pmachine.connections` setting, so they are part
+of the Pulse setup and can be reviewed or shared with the workspace. Additional
+service types can be added through `pulse-pmachine.connectionServices`.
+
 ## Run from the editor
 
 Open a Pascalish, COBOLish, VBish, C#, MNF, WFL, or MAPL source file and select **Run on PMachine** above the source or from the editor title bar. Choose the local JavaScript PMachine, a discovered JavaScript PMachine (for example, `magic-js-pmachine-01`), or a discovered ESP32 PMachine; output appears in the `Pulse PMachine` Output channel. Discovered JavaScript targets run through the Aggregator deployment API using their node ID; their registry addresses are not device API endpoints. Configured direct host:port JavaScript nodes and ESP32 boards use the shared `runPcodeOnEsp32` runner in `aggregator/scripts/run-pascal-on-esp32-node.mjs` to upload compiled pcode and its signed program map via `/ffs/upload`, then run via `/pmachine/execute_file`. The local JavaScript option runs in-process. Set `pulse-pmachine.backendUrl` if the Aggregator is not running at `http://127.0.0.1:4000`.

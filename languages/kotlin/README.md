@@ -32,7 +32,7 @@ node scripts\test-upstream.mjs --supported
 node scripts\inventory-corpus.mjs C:\kotlin-testData C:\reports\kotlin-inventory.json
 ```
 
-At the pinned revision, all 66 supported cases pass on the JavaScript P-machine;
+At the pinned revision, all 95 supported cases pass on the JavaScript P-machine;
 diagnostic cases are compiler-only. The class/object cases use the bounded
 stateless object ABI, and nullable values are erased only for the exercised
 non-null receiver path. The supported
@@ -75,12 +75,12 @@ The non-null assertion operator (`!!`) is lowered through the shared
 explicit `NullPointerException` by both JavaScript and ESP32 runtimes; it is
 not silently erased.
 
-`throw` lowers through `system.exception.throw` and reports an explicit
-runtime failure. Catchable exception frames and `try`/`catch` unwinding are
-not yet implemented; catch blocks with executable bodies are rejected until
-the P-machine exception-frame ABI is added. Empty, unreachable catch bodies
-are accepted for control-flow compatibility. Throw expressions are treated as
-non-returning (`Nothing`-like) for return-path analysis.
+`throw` lowers through `system.exception.throw`. The JavaScript backend supports
+the first scalar exception slice: `TRY_BEGIN`/`TRY_END` frames transfer a
+thrown scalar value to one `catch` handler, unwind procedure frames, and run
+`finally` blocks. Throw expressions are treated as non-returning
+(`Nothing`-like) for return-path analysis. The ESP32 target rejects programs
+using this feature until its native exception-frame dispatcher is implemented.
 They can therefore occupy the non-value branch of a value-producing `if`
 expression. Active `finally` blocks are emitted before an uncaught throw;
 `return`, `break`, and `continue`; catchable unwinding remains pending.
@@ -131,6 +131,10 @@ contract: handle zero is null, object/array/callable are distinct reference
 kinds, and handles are bounded 16-bit values. Heap-backed references are
 bounded by the target's managed-object capacity and are not yet exposed as
 general Kotlin stateful classes or collections.
+The versioned `exception.frames` feature is shared by the scalar backend used
+by Kotlin, C#, and VBish. It advertises exception ABI version 1; executable
+`catch` bodies remain rejected until handler tables and target-native
+unwinding are complete.
 
 No Kotlin interpreter, scheduler state, persistent buffers or production
 concurrency-limit changes are introduced. Defaults use procedure-local storage
@@ -302,22 +306,24 @@ upstream checkout at the pinned revision. With the variable set, `npm test`
 also includes the supported upstream cases. Without it, that portion is
 explicitly skipped; the remaining tests require no network.
 
-The manifest currently pins 2,047 cases, not a statistically representative
+The The manifest currently pins 2,047 cases, not a statistically representative
 sample or a Kotlin conformance score: the original 47 hand-selected cases
 (forty codegen `box()` programs and seven negative diagnostics) plus the first
 2,000 unpinned `codegen/box` files in deterministic path order, added by
 `scripts/expand-upstream.mjs` and classified honestly (`supported`,
 `failing`, `rejected`, or `blocked`). The current classification
-(`reports/upstream-reclassified.json`) has 59 supported `box()` programs,
-1,665 rejected by the compiler's subset with located diagnostics, and 316
-needing multi-file/module harness features.
-The runner appends only
-an entry point that prints the original `box()` result and requires exactly
-`OK`; it strips upstream diagnostic markup while retaining line numbers and
-checks the first `VAL_REASSIGNMENT` diagnostic's category and line. It does
-not compare later diagnostics, exact spans, warnings, or full Kotlin diagnostic
-codes. Fixtures with multiple files, backend directives requiring special
-handling, or external dependencies are not adapted.
+(`reports/upstream-reclassified-after-multifile.json`) has 88 supported
+`box()` programs and 1,952 rejected by the compiler's subset with located
+diagnostics; the seven diagnostic fixtures bring the certified total to 95.
+JetBrains `FILE` and `MODULE` directives are normalized into one compilation
+unit before classification, so multi-file fixtures are no longer silently
+blocked by the harness. The runner appends only an entry point that prints the
+original `box()` result and requires exactly `OK`; it strips upstream diagnostic
+markup while retaining line numbers and checks the first `VAL_REASSIGNMENT`
+diagnostic's category and line. It does not compare later diagnostics, exact
+spans, warnings, or full Kotlin diagnostic codes. Backend directives requiring
+special handling or external dependencies are still rejected explicitly when
+the compiler cannot support them.
 
 To run **all** selected cases:
 
@@ -325,10 +331,10 @@ To run **all** selected cases:
 npm run audit:upstream
 ```
 
-The audit verifies every non-blocked classification: supported cases must pass,
-and rejected/failing cases must still not pass — a case that now passes is
-reported as a pending manifest upgrade and fails the audit until reclassified.
-The current certified result is 66 of 66 supported cases on the JavaScript
+The audit verifies every pinned classification: supported cases must pass, and
+rejected/failing cases must still not pass — a case that now passes is reported
+as a pending manifest upgrade and fails the audit until reclassified.
+The current certified result is 95 of 95 supported cases on the JavaScript
 P-machine. A parser or unsupported feature error is not counted as an expected
 diagnostic.
 

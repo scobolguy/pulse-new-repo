@@ -280,7 +280,8 @@ test('emits finally cleanup before an uncaught throw', async () => {
 }`, { fileName: 'finally.kt' });
   const cleanup = artifact.pcodeText.indexOf('PUSH_STR "cleanup"');
   const thrown = artifact.pcodeText.indexOf('CALL_EXT system.exception.throw 1');
-  assert.ok(cleanup >= 0 && cleanup < thrown);
+  assert.ok(cleanup >= 0 && thrown >= 0);
+  assert.match(artifact.pcodeText, /TRY_BEGIN CS_TRY_FINALLY_THROW_/);
 });
 
 test('emits finally cleanup before break and continue jumps', async () => {
@@ -321,6 +322,32 @@ test('executes finally cleanup before reporting an uncaught throw', async () => 
     sourceMessage: '',
     runtimeContext: { maxSteps: 100000, maxCallDepth: 64 }
   }), /KotlinThrow: boom/);
+});
+
+test('catches a thrown scalar value and binds the catch value', async () => {
+  const { result } = await run(`fun main() {
+  try { throw "boom" }
+  catch (error: Exception) { println(error) }
+}`);
+  assert.deepEqual(result.stdout, ['boom']);
+});
+
+test('unwinds a throwing callee into the caller catch handler', async () => {
+  const { result } = await run(`fun fail() { throw "from-call" }
+fun main() {
+  try { fail() }
+  catch (error: Throwable) { println(error) }
+}`);
+  assert.deepEqual(result.stdout, ['from-call']);
+});
+
+test('runs finally after a caught exception', async () => {
+  const { result } = await run(`fun main() {
+  try { throw "boom" }
+  catch (error: Exception) { println(error) }
+  finally { println("cleanup") }
+}`);
+  assert.deepEqual(result.stdout, ['boom', 'cleanup']);
 });
 
 test('evaluates subject when expressions with equality alternatives and an inferred return type', async () => {
@@ -567,10 +594,6 @@ fun main() {}`, /Nullable string requires a non-null assertion/],
 fun main() {}`, /Cannot use 'null' where 'string'/],
   ['null passed to non-nullable string parameter', `fun display(text: String) { println(text) }
 fun main() { display(null) }`, /Cannot use 'null' where 'string'/],
-  ['catch blocks before exception-frame ABI', `fun main() {
-  try { println("body") }
-  catch (failure: Exception) { println("caught") }
-}`, /catch blocks require the P-machine exception-frame ABI/],
   ['reassignment of a val local', `fun main() {
   val answer = 41
   answer = 42

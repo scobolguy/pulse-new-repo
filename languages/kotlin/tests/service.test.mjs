@@ -162,10 +162,15 @@ for (const [description, sourceText, expected] of [
   ['overloaded handler', '@HttpGet("/api/a") fun a(): String = "a"\nfun a(x: Int): String = "b"', /must not be overloaded/],
   ['wrong host binding argument type', 'import pulse.http.requestQuery\n@HttpGet("/api/a") fun a(): String = requestQuery(1)', /Cannot use 'int' where 'string'/],
   ['host bindings outside services', 'import pulse.http.requestBody\nfun main() { println(requestBody()) }', /Unknown static method 'requestBody'/],
-  ['unsupported annotation', '@Unknown fun main() {}', /Only HTTP method annotations/],
+  ['unsupported annotation shape', '@HttpGet<Int>("/api/a") fun a(): String = "a"', /does not accept type arguments/],
   ['unavailable scalar library binding', '@HttpGet("/api/a") fun a(): String { val n = 4\n return "n=" + n\n}', /do not yet support scalar library calls/]
 ]) {
   test(`Kotlin service rejects ${description}`, () => {
     assert.throws(() => compileKotlinToPcode(sourceText, { fileName: 'service.kt' }), expected);
   });
 }
+
+test('Kotlin ignores unknown annotations on functions', () => {
+  const compiled = compileKotlinToPcode('@Unknown fun main() { println("ok") }', { fileName: 'service.kt' });
+  assert.ok(compiled.pcodeText.includes('PUSH_STR "ok"'));
+});

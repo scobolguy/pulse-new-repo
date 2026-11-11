@@ -842,7 +842,7 @@ function parsePcode(text) {
       targetIndex: -1
     };
 
-    if (mnemonic === 'JMP' || mnemonic === 'JZ') {
+    if (mnemonic === 'JMP' || mnemonic === 'JZ' || mnemonic === 'TRY_BEGIN') {
       instr.operand = trimCopy(rest);
       unresolved.push({ idx: instructions.length, label: instr.operand });
     } else if (
@@ -862,6 +862,9 @@ function parsePcode(text) {
       || mnemonic === 'ORCH_SYNC_SERVICE'
       || mnemonic === 'ORCH_FAIL_TXN'
       || mnemonic === 'ORCH_RETURN_SUCCESS'
+      || mnemonic === 'TRY_BEGIN'
+      || mnemonic === 'TRY_END'
+      || mnemonic === 'RETHROW'
       || mnemonic === 'PUSH_STR'
     ) {
       instr.operand = parseQuotedOperand(rest);
@@ -1143,6 +1146,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
   }
   let currentFrame = globalFrame;
   const callStack = [];
+  const exceptionHandlers = [];
   const pendingOrchTasks = [];
   const taskTable = new Map();
   const queues = new Map();
@@ -1223,6 +1227,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
     }
     const instr = instructions[pc];
     const op = instr.mnemonic;
+    try {
 
     if (typeof debugHooks.beforeInstruction === 'function') {
       await waitFor('debugger', () => debugHooks.beforeInstruction({
@@ -1243,6 +1248,29 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
     }
     if (op === 'HALT') {
       break;
+    }
+    if (op === 'TRY_BEGIN') {
+      exceptionHandlers.push({
+        frame: currentFrame,
+        callDepth: callStack.length,
+        stackDepth: stack.length,
+        targetIndex: instr.targetIndex
+      });
+      pc += 1;
+      continue;
+    }
+    if (op === 'TRY_END') {
+      const handler = exceptionHandlers.pop();
+      if (!handler || handler.frame !== currentFrame)
+        throw new Error('P-code exception frame mismatch');
+      pc += 1;
+      continue;
+    }
+    if (op === 'RETHROW') {
+      const value = stack.pop();
+      const error = new Error(`KotlinThrow: ${String(value)}`);
+      error.pcodeValue = value;
+      throw error;
     }
     if (op === 'CALL_EXT') {
       const name = String(instr.operand?.label || '').toLowerCase();
@@ -2479,6 +2507,22 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
     }
 
     pc += 1;
+    } catch (error) {
+      const handlerIndex = exceptionHandlers.length - 1;
+      if (handlerIndex < 0) throw error;
+      const handler = exceptionHandlers[handlerIndex];
+      exceptionHandlers.splice(handlerIndex, 1);
+      while (currentFrame !== handler.frame) {
+        const frame = callStack.pop();
+        if (!frame) throw error;
+        if (memory) memory.closeScope(currentFrame.memoryScope);
+        currentFrame = frame.frame;
+      }
+      stack.length = handler.stackDepth;
+      stack.push(Object.hasOwn(error || {}, 'pcodeValue') ? error.pcodeValue : String(error?.message || error));
+      pc = handler.targetIndex;
+      if (pc < 0) throw error;
+    }
   }
 
   reconcileObjects();

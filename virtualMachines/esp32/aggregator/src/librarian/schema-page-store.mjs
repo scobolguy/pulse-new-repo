@@ -113,5 +113,18 @@ export function createSchemaPageStore(root) {
     return pending.get(schemaPath);
   }
 
-  return { manifest, publish, ensure };
+  async function readPage(schemaKey, revision, nodeId, cursor) {
+    if (!/^[a-f0-9]{64}$/.test(schemaKey) || !/^[a-f0-9]{64}$/.test(revision)
+      || !/^n(?:[.][0-9a-z]+)*$/.test(nodeId) || !/^(?:0|[1-9][0-9]*)$/.test(cursor)) {
+      throw Object.assign(new Error('Invalid schema page request'), { status: 400 });
+    }
+    try {
+      return JSON.parse(await fs.readFile(path.join(root, schemaKey, revision, `${nodeId}-${cursor}.json`), 'utf8'));
+    } catch (error) {
+      if (error.code === 'ENOENT') throw Object.assign(new Error('Schema page not found'), { status: 404 });
+      throw error;
+    }
+  }
+
+  return { manifest, publish, ensure, readPage };
 }

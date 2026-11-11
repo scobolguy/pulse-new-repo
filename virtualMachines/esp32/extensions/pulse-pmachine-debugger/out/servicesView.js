@@ -73,20 +73,72 @@ export class ServicesViewProvider {
     category;
     changes = new vscode.EventEmitter();
     onDidChangeTreeData = this.changes.event;
+    rootItems;
+    rootLoading = false;
     constructor(output, category = 'services') {
         this.output = output;
         this.category = category;
     }
     refresh() {
+        this.rootItems = undefined;
+        this.rootLoading = false;
         this.changes.fire(undefined);
     }
     dispose() {
         this.changes.dispose();
     }
+    async dataLibrarianItem(base) {
+        const collections = [
+            ['Files', '/api/librarian/files', 'files'],
+            ['Schemas', '/api/librarian/schemas', 'schemas'],
+            ['Subschemas', '/api/librarian/subschemas', 'subschemas'],
+            ['Data Types', '/api/librarian/data-types', 'dataTypes'],
+            ['Mapper Rulesets', '/api/librarian/mapper-rulesets', 'mapperRulesets'],
+        ];
+        const groups = await Promise.all(collections.map(async ([label, path, key]) => {
+            const response = await fetch(`${base}${path}`, { signal: AbortSignal.timeout(15000) });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok)
+                throw new Error(`${path} returned HTTP ${response.status}`);
+            const values = payload?.[key];
+            if (!Array.isArray(values))
+                throw new Error(`${path} returned an invalid collection`);
+            const entries = values.map((value, index) => {
+                const id = String(value?.id ?? value?.path ?? value?.name ?? `${key}:${index}`);
+                const name = String(value?.name ?? value?.label ?? value?.path ?? id);
+                return new ServiceCatalogItem(null, name, id);
+            });
+            return new ServiceCatalogItem(null, label, `${entries.length} objects`, entries);
+        }));
+        const item = new ServiceCatalogItem(null, 'Data Librarian', 'Legacy data objects', groups);
+        item.id = 'servers:data-librarian';
+        item.iconPath = new vscode.ThemeIcon('library');
+        return item;
+    }
     getTreeItem(item) {
         return item;
     }
     async getChildren(item) {
+        if (!item) {
+            if (this.rootItems)
+                return this.rootItems;
+            if (this.rootLoading)
+                return [new ServiceCatalogItem(null, `Loading ${this.category}...`)];
+            this.rootLoading = true;
+            void this.loadChildren(undefined).then(items => {
+                this.rootItems = items;
+                this.rootLoading = false;
+                this.changes.fire(undefined);
+            }, error => {
+                this.rootItems = [new ServiceCatalogItem(null, `${this.category} unavailable`, error instanceof Error ? error.message : String(error))];
+                this.rootLoading = false;
+                this.changes.fire(undefined);
+            });
+            return [new ServiceCatalogItem(null, `Loading ${this.category}...`)];
+        }
+        return this.loadChildren(item);
+    }
+    async loadChildren(item) {
         if (item) {
             return item.instances;
         }
@@ -116,6 +168,16 @@ export class ServicesViewProvider {
                     return parent;
                 })
                 : [new ServiceCatalogItem(null, `No ${this.category} registered`)];
+            if (this.category === 'servers') {
+                try {
+                    items.unshift(await this.dataLibrarianItem(base));
+                }
+                catch (error) {
+                    const detail = error instanceof Error ? error.message : String(error);
+                    this.output.appendLine(`Data Librarian server discovery failed: ${detail}`);
+                    items.unshift(new ServiceCatalogItem(null, 'Data Librarian unavailable', detail));
+                }
+            }
             if (isRecord(payload) && Array.isArray(payload.errors)) {
                 for (const error of payload.errors) {
                     if (!isRecord(error))

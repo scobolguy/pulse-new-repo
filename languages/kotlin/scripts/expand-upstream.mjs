@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { compileKotlinToPcode } from '../src/compile-kotlin-to-pcode.mjs';
 import { upstreamCases, upstreamRevision } from '../tests/upstream-cases.mjs';
 import { createExecutionTarget } from '../tests/execution-targets.mjs';
+import { normalizeFixtureSource } from '../tests/upstream-runner.mjs';
 
 // Selects the next batch of unpinned JetBrains codegen/box cases in
 // deterministic path order, downloads them with integrity pinning, classifies
@@ -69,11 +70,9 @@ await Promise.all(Array.from({ length: 16 }, async () => {
 const executor = await createExecutionTarget('js');
 const results = [];
 for (const [index, item] of downloads.entries()) {
-  const source = item.bytes.toString('utf8');
+  const source = normalizeFixtureSource(item.bytes.toString('utf8'));
   let status, reason;
-  if (/^\s*\/\/\s*(?:FILE|MODULE):/m.test(source)) {
-    status = 'blocked'; reason = 'Upstream multi-file/module infrastructure';
-  } else if (!/\bfun\s+box\s*\(/.test(source)) {
+  if (!/\bfun\s+box\s*\(/.test(source)) {
     status = 'blocked'; reason = 'No supported entry-point adapter';
   } else {
     let artifact;

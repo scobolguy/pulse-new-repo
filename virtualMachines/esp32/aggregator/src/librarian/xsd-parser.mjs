@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url';
 import { compilePascalishProgramWithAntlr } from '../../scripts/compile-pascalish-program-antlr-to-pcode.mjs';
 import { createPascalishServiceHost } from '../../../pmachines/javascript/src/service-host.mjs';
 import { createFilesystemBindings } from '../../../pmachines/javascript/src/filesystem-bindings.mjs';
-import { createFilesystemServiceClient } from './filesystem-service-client.mjs';
 import { createPredigestedXsdStore } from './predigested-xsd-store.mjs';
 
 const CACHE_VALIDATION_CONCURRENCY = 8;
@@ -13,13 +12,8 @@ const CACHE_VALIDATION_CONCURRENCY = 8;
 export async function createPascalishXsdParser({
   logger = console, schemaRoot, filesystemServiceUrl = '', predigestedRoot = ''
 } = {}) {
-  const filesystemClient = filesystemServiceUrl
-    ? createFilesystemServiceClient(filesystemServiceUrl)
-    : null;
   const storageRoots = { schemas: { path: schemaRoot, readOnly: true } };
-  const reader = filesystemClient
-    ? { handlers: filesystemClient.bindings }
-    : await createFilesystemBindings(storageRoots, { maxFileBytes: 1000000 });
+  const reader = await createFilesystemBindings(storageRoots, { maxFileBytes: 1000000 });
   const predigestedStore = predigestedRoot
     ? createPredigestedXsdStore(path.resolve(predigestedRoot))
     : null;
@@ -32,7 +26,6 @@ export async function createPascalishXsdParser({
     maxBodyBytes: 1000000, maxResponseBytes: 1000000,
     desktopBudget: true, maxSteps: null, maxExecutionMs: null, maxEvents: 256,
     storageRoots, maxFileBytes: 1000000, logger,
-    filesystemBindingOverrides: filesystemClient?.bindings
   });
   await host.start();
   const cache = new Map();

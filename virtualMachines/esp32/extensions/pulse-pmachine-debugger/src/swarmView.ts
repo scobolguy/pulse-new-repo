@@ -4,15 +4,33 @@ import { loadSwarmNodes, type SwarmNode } from './swarmBackend.js';
 export class SwarmViewProvider implements vscode.TreeDataProvider<vscode.TreeItem>, vscode.Disposable {
   private readonly changes = new vscode.EventEmitter<vscode.TreeItem | undefined>();
   readonly onDidChangeTreeData = this.changes.event;
+  private rootItems: vscode.TreeItem[] | undefined;
+  private rootLoading = false;
 
   constructor(private readonly output: vscode.OutputChannel) {}
 
-  refresh(): void { this.changes.fire(undefined); }
+  refresh(): void { this.rootItems = undefined; this.rootLoading = false; this.changes.fire(undefined); }
   dispose(): void { this.changes.dispose(); }
   getTreeItem(item: vscode.TreeItem): vscode.TreeItem { return item; }
 
   async getChildren(item?: vscode.TreeItem): Promise<vscode.TreeItem[]> {
     if (item) return [];
+    if (this.rootItems) return this.rootItems;
+    if (this.rootLoading) return [new vscode.TreeItem('Loading Swarm...')];
+    this.rootLoading = true;
+    void this.loadRoot().then(items => {
+      this.rootItems = items;
+      this.rootLoading = false;
+      this.changes.fire(undefined);
+    }, error => {
+      this.rootItems = [new vscode.TreeItem(`Swarm unavailable - ${error instanceof Error ? error.message : String(error)}`)];
+      this.rootLoading = false;
+      this.changes.fire(undefined);
+    });
+    return [new vscode.TreeItem('Loading Swarm...')];
+  }
+
+  private async loadRoot(): Promise<vscode.TreeItem[]> {
     const base = vscode.workspace.getConfiguration('pulse-pmachine')
       .get<string>('backendUrl', 'http://127.0.0.1:4000').trim();
     try {

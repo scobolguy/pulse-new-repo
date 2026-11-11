@@ -87,10 +87,14 @@ export class ServiceCatalogItem extends vscode.TreeItem {
 export class ServicesViewProvider implements vscode.TreeDataProvider<ServiceCatalogItem>, vscode.Disposable {
   private readonly changes = new vscode.EventEmitter<ServiceCatalogItem | undefined>();
   readonly onDidChangeTreeData = this.changes.event;
+  private rootItems: ServiceCatalogItem[] | undefined;
+  private rootLoading = false;
 
   constructor(private readonly output: vscode.OutputChannel, private readonly category: 'services' | 'servers' = 'services') {}
 
   refresh(): void {
+    this.rootItems = undefined;
+    this.rootLoading = false;
     this.changes.fire(undefined);
   }
 
@@ -106,6 +110,22 @@ export class ServicesViewProvider implements vscode.TreeDataProvider<ServiceCata
     if (item) {
       return item.instances;
     }
+    if (this.rootItems) return this.rootItems;
+    if (this.rootLoading) return [new ServiceCatalogItem(null, `Loading ${this.category}...`)];
+    this.rootLoading = true;
+    void this.loadRoot().then(items => {
+      this.rootItems = items;
+      this.rootLoading = false;
+      this.changes.fire(undefined);
+    }, error => {
+      this.rootItems = [new ServiceCatalogItem(null, `${this.category} unavailable`, error instanceof Error ? error.message : String(error))];
+      this.rootLoading = false;
+      this.changes.fire(undefined);
+    });
+    return [new ServiceCatalogItem(null, `Loading ${this.category}...`)];
+  }
+
+  private async loadRoot(): Promise<ServiceCatalogItem[]> {
 
     const base = String(vscode.workspace.getConfiguration('pulse-pmachine')
       .get('backendUrl', 'http://127.0.0.1:4000')).trim().replace(/\/$/, '');

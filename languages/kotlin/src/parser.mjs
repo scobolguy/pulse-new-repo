@@ -42,7 +42,8 @@ function parseType(ctx, fileName, typeParameters, knownTypes = new Set()) {
       nullable: false, ...position };
   }
   const typeName = ctx.getText().replace(/\?$/, '').replace(/<.*>$/, '');
-  const names = { Byte: 'sbyte', Short: 'short', Int: 'int', Boolean: 'bool', String: 'string', Unit: 'void',
+  const names = { Byte: 'sbyte', Short: 'short', Int: 'int', Boolean: 'bool', String: 'string',
+    Exception: 'string', Throwable: 'string', Unit: 'void',
     IntArray: 'int-array', BooleanArray: 'bool-array', ByteArray: 'byte-array', ShortArray: 'short-array' };
   const identifier = /^`[^`]+`$/.test(typeName) ? typeName.slice(1, -1) : typeName;
   const name = typeParameters.has(identifier) ? identifier
@@ -94,7 +95,17 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
   const parser = new KotlinParser(tokens);
   parser.removeErrorListeners();
   parser.addErrorListener(new Listener());
-  const tree = parser.kotlinFile();
+  let tree;
+  try {
+    tree = parser.kotlinFile();
+  } catch (error) {
+    // Pathologically nested sources overflow the recursive-descent predictor;
+    // report a located diagnostic instead of crashing the compiler.
+    if (error instanceof RangeError)
+      fail({ fileName, sourceLanguage: 'kotlin', line: 1, column: 1 },
+        'Source nesting exceeds parser recursion limits in this subset');
+    throw error;
+  }
   if (errors.length) fail(errors[0], errors[0].message);
 
   const knownTypes = new Set();
@@ -358,8 +369,16 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
     }
     if (name === 'infixExpression') {
       const children = ruleChildren(ctx);
-      if (children.length !== 1) fail(location(ctx), 'Infix function calls are not supported by the P-code subset');
-      return expression(children[0]);
+      let value = expression(children[0]);
+      // `until` is the only lowered infix function: it is the canonical
+      // exclusive range spelling in the corpus and maps directly onto ..<.
+      for (let index = 1; index < children.length; index += 2) {
+        if (idValue(children[index]) !== 'until')
+          fail(location(children[index]), 'Infix function calls are not supported by the P-code subset');
+        value = { kind: 'binary', token: location(children[index]), op: '..<',
+          left: value, right: expression(children[index + 1]) };
+      }
+      return value;
     }
     if (name === 'castExpression') {
       const children = ruleChildren(ctx);
@@ -457,7 +476,7 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
           fail(location(suffix), 'Property access, indexing, and null assertions are not supported by the P-code subset');
         }
       }
-      if (value.kind === 'scalar-member' || value.kind === 'callable-reference')
+      if (value.kind === 'scalar-member')
         fail(value.token, `${value.member || 'property'} requires a function call`);
       return value;
     }
@@ -481,7 +500,25 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
         fail(location(literal), `Unsupported Kotlin literal '${raw}'`);
       }
       if (ctx.identifier()) return { kind: 'name', token: location(ctx.identifier()), name: idValue(ctx.identifier()) };
+      if (ctx.THIS()) {
+        if (ctx.AT()) fail(location(ctx), 'Labeled this expressions are not supported by the P-code subset');
+        return { kind: 'this', token: location(ctx) };
+      }
       if (ctx.lambdaLiteral()) return readLambda(ctx.lambdaLiteral());
+      if (ctx.callableReference()) {
+        const reference = ctx.callableReference();
+        if (reference.CLASS()) fail(location(reference), 'Class literals and reflection are not supported by the P-code subset');
+        const member = idValue(reference.identifier());
+        let receiver = null;
+        if (reference.THIS()) receiver = { kind: 'this', token: location(reference) };
+        else if (reference.userType()) {
+          const text = reference.userType().getText();
+          if (text.includes('.') || text.includes('<'))
+            fail(location(reference), 'Qualified callable references are not supported by the P-code subset');
+          receiver = { kind: 'name', token: { ...location(reference), value: text }, name: text };
+        }
+        return { kind: 'callable-reference', token: location(ctx), member, receiver, safe: false };
+      }
       if (ctx.expression()) return expression(ctx.expression());
       if (ctx.ifExpression()) return conditionalExpression(ctx.ifExpression());
       if (ctx.whenExpression()) return whenExpression(ctx.whenExpression());
@@ -515,10 +552,18 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
 
   function tryStatement(ctx) {
     const catchBlocks = ctx.catchBlock();
+    if (catchBlocks.length > 1)
+      fail(location(ctx), 'Only one Kotlin catch handler is supported by the scalar P-code subset');
     const catches = catchBlocks.map(catchBlock => {
-      if (catchBlock.block().statement().length)
-        fail(location(catchBlock), 'Kotlin catch blocks require the P-machine exception-frame ABI for executable bodies');
-      return { body: readBlock(catchBlock.block()) };
+      const parameter = catchBlock.identifier();
+      const typeReference = catchBlock.typeReference();
+      const typeName = typeReference.userType()?.getText();
+      if (!typeName)
+        fail(location(typeReference), 'Catch parameter types must be named exception types');
+      return {
+        parameter: { token: location(parameter), name: idValue(parameter), type: { name: 'catch-value', exceptionType: typeName } },
+        body: readBlock(catchBlock.block())
+      };
     });
     return {
       kind: 'try', token: location(ctx), body: readBlock(ctx.block()), catches,
@@ -563,9 +608,46 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
         condition: expression(loop.expression()), body
       };
       const identifier = loop.identifier();
-      const range = expression(loop.expression());
-      if (range.kind !== 'binary' || !['..', '..<'].includes(range.op))
-        fail(location(loop), 'For loops must iterate over a numeric range');
+      let range = expression(loop.expression());
+      // xs.indices is 0 until xs.size; the receiver must be a simple name so
+      // re-evaluating it for the bound cannot repeat side effects.
+      if (range.kind === 'property' && range.name === 'indices' && !range.safe
+        && range.receiver?.kind === 'name') {
+        range = { kind: 'binary', token: range.token, op: '..<',
+          left: { kind: 'literal', token: range.token, literalType: 'int', value: '0' },
+          right: { kind: 'property', token: range.token, name: 'size', receiver: range.receiver, safe: false } };
+      }
+      if (range.kind !== 'binary' || !['..', '..<'].includes(range.op)) {
+        // for (x in xs): bind the sequence once, then loop by index. A
+        // non-array sequence fails cleanly at the size/index type checks.
+        const marker = identifier.start.tokenIndex;
+        const seqToken = { ...location(loop), value: `$pulse$seq$${marker}` };
+        const idxToken = { ...location(identifier), value: `$pulse$idx$${marker}` };
+        const endToken = { ...location(identifier), value: `$pulse$rangeEnd$${marker}` };
+        const seqVariable = { kind: 'name', token: seqToken, name: seqToken.value };
+        const idxVariable = { kind: 'name', token: idxToken, name: idxToken.value };
+        const limitVariable = { kind: 'name', token: endToken, name: endToken.value };
+        const element = { kind: 'declare', token: location(identifier), infer: true, type: { name: 'int' },
+          declarations: [{ token: location(identifier), mutable: false,
+            value: { kind: 'index-get', token: location(identifier), receiver: seqVariable, index: idxVariable } }] };
+        return { kind: 'block', token: location(loop), statements: [
+          { kind: 'declare', token: location(loop), infer: true, type: { name: 'int' },
+            declarations: [{ token: seqToken, mutable: false, value: range }] },
+          { kind: 'for', token: location(loop), inclusiveRange: false,
+            init: { kind: 'declare', token: location(loop), type: { name: 'int' }, declarations: [
+              { token: idxToken, mutable: false,
+                value: { kind: 'literal', token: location(loop), literalType: 'int', value: '0' } },
+              { token: endToken, mutable: false,
+                value: { kind: 'property', token: location(loop), name: 'size', receiver: seqVariable,
+                  safe: false, forSequence: true } }
+            ] },
+            condition: { kind: 'binary', token: location(loop), op: '<', left: idxVariable, right: limitVariable },
+            increment: [{ kind: 'increment', token: location(identifier), op: '++', value: idxVariable,
+              prefix: true, compilerGenerated: true }],
+            body: { kind: 'block', token: location(loop),
+              statements: [element, ...(body.kind === 'block' ? body.statements : [body])] } }
+        ] };
+      }
       const inclusiveRange = range.op === '..';
       const endToken = { ...location(identifier), value: `$pulse$rangeEnd$${identifier.start.tokenIndex}` };
       const loopName = idValue(identifier);
@@ -614,10 +696,23 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
       return token;
     });
     typeParameters = new Set(typeParams.map(token => token.value));
+    const receiverContext = typeof ctx.functionReceiver === 'function' ? ctx.functionReceiver() : null;
+    let extensionReceiver = null;
+    if (receiverContext) {
+      // Extensions on classes declared in this file become synthesized
+      // members; scalar, nullable, generic and foreign receivers are rejected.
+      const receiverName = receiverContext.userType()?.getText().replace(/<.*>$/, '');
+      if (!receiverContext.userType() || receiverContext.QUESTION())
+        fail(location(receiverContext), 'Extension receivers must be non-null declared classes in this subset');
+      if (!knownTypes.has(receiverName))
+        fail(location(receiverContext), `Extension functions require a class declared in this file, not '${receiverName}'`);
+      extensionReceiver = receiverName;
+    }
     const nameToken = location(ctx.identifier());
     const params = (ctx.valueParameters().valueParameter() || []).map(parameter => {
       if (parameter.VAL() || parameter.VAR()) fail(location(parameter), 'Function parameters cannot use val or var here');
-      const modifiers = parameter.parameterModifier().map(item => item.getText());
+      const modifiers = parameter.parameterModifier().map(item => item.getText())
+        .filter(text => !text.startsWith('@')); // parameter annotations carry no runtime behavior here
       if (modifiers.some(item => item !== 'vararg'))
         fail(location(parameter), 'Function parameter modifiers are not supported by the P-code subset');
       return { token: location(parameter.identifier()), type: readType(parameter.typeReference()),
@@ -628,6 +723,8 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
     if (firstDefault >= 0 && params.slice(firstDefault).some(param => !param.defaultValue))
       fail(nameToken, 'Only trailing positional default parameters are supported in this subset');
     const body = ctx.functionBody();
+    if (!body)
+      fail(nameToken, 'Function declarations without bodies require interface or abstract-class dispatch, which this subset does not provide');
     const block = body.block()
       ? readBlock(body.block())
       : { kind: 'block', token: location(body), statements: [
@@ -642,13 +739,77 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
     typeParameters = new Set();
     return {
       token: nameToken, name: forcedName || (nameToken.value === 'main' ? 'Main' : nameToken.value),
-      owner, returnType, typeParams, params, body: block,
+      owner, returnType, typeParams, params, body: block, extensionReceiver,
       modifiers: new Set(['public', 'static']), attributes: [], block
     };
   }
 
+  // Rewrites a method body so bare field reads route through the synthesized
+  // getters, field writes through setters, explicit `this` becomes the hidden
+  // receiver parameter, and bare sibling-member calls dispatch on it. Used for
+  // declared members of stateful classes and for attached extension functions.
+  function convertToInstanceMethod(method, className, fields, memberNames) {
+    const fieldIndex = new Map(fields.map(field => [field.name, field]));
+    const thisRef = token => ({ kind: 'name', token: { ...token, value: '$this' }, name: '$this' });
+    const rewrite = (node, blocked) => {
+      if (Array.isArray(node)) return node.map(item => rewrite(item, blocked));
+      if (!node || typeof node !== 'object') return node;
+      if (!node.kind) {
+        const result = {};
+        for (const [key, value] of Object.entries(node))
+          result[key] = value && typeof value === 'object' ? rewrite(value, blocked) : value;
+        return result;
+      }
+      if (node.kind === 'block') {
+        const scope = new Set(blocked);
+        const statements = node.statements.map(statementNode => {
+          const result = rewrite(statementNode, scope);
+          if (statementNode.kind === 'declare')
+            for (const declaration of statementNode.declarations) scope.add(declaration.token.value);
+          return result;
+        });
+        return { ...node, statements };
+      }
+      if (node.kind === 'lambda') {
+        const shadowed = new Set([...blocked, ...(node.params || []).map(param => param.token.value)]);
+        return { ...node, body: rewrite(node.body, shadowed) };
+      }
+      if (node.kind === 'this') return thisRef(node.token);
+      if (node.kind === 'name' && fieldIndex.has(node.name) && !blocked.has(node.name))
+        return { kind: 'property', token: node.token, name: node.name, receiver: thisRef(node.token), safe: false };
+      if (node.kind === 'assign' && node.left.kind === 'name'
+        && fieldIndex.has(node.left.name) && !blocked.has(node.left.name)) {
+        const field = fieldIndex.get(node.left.name);
+        if (!field.mutable) fail(node.token, `Val '${node.left.name}' cannot be reassigned`);
+        const right = rewrite(node.right, blocked);
+        const property = { kind: 'property', token: node.left.token, name: node.left.name,
+          receiver: thisRef(node.left.token), safe: false };
+        const value = node.op === '=' ? right
+          : { kind: 'binary', token: node.token, op: node.op[0], left: property, right };
+        return { kind: 'call', token: node.token, receiver: thisRef(node.token), safe: false,
+          name: `set${node.left.name[0].toUpperCase()}${node.left.name.slice(1)}`, args: [value], typeArgs: [] };
+      }
+      if (node.kind === 'call' && !node.receiver && memberNames.has(node.name) && !blocked.has(node.name))
+        return { ...node, receiver: thisRef(node.token),
+          args: node.args.map(argument => rewrite(argument, blocked)) };
+      const result = {};
+      for (const [key, value] of Object.entries(node))
+        result[key] = key === 'token' || key === 'type' ? value
+          : value && typeof value === 'object' ? rewrite(value, blocked) : value;
+      return result;
+    };
+    method.body = rewrite(method.body, new Set(method.params.map(param => param.token.value)));
+    method.block = method.body;
+    method.instance = true;
+    method.params.unshift({ token: { ...method.token, value: '$this' }, type: { name: className }, synthetic: true });
+    method.modifiers.delete('static');
+  }
+
   function readClass(ctx) {
     const name = idValue(ctx.identifier());
+    const supertypes = (typeof ctx.delegationSpecifiers === 'function'
+      ? ctx.delegationSpecifiers()?.delegationSpecifier() || [] : [])
+      .map(specifier => specifier.typeReference().getText().replace(/\?$/, '').replace(/<.*>$/, ''));
     // Object declarations have no typeParameters or primaryConstructor grammar
     // rules, so their parse contexts lack those accessors entirely.
     const classTypeParams = (typeof ctx.typeParameters === 'function'
@@ -666,8 +827,13 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
         const modifiers = parameter.parameterModifier().map(item => item.getText());
         if (stateful && !parameter.VAL() && !parameter.VAR())
           fail(token, 'Primary constructor parameters must be marked val or var in stateful classes');
-        if (stateful && (type.nullable || !['int', 'byte', 'short', 'ushort', 'sbyte', 'bool', 'string'].includes(type.name)))
-          fail(type, 'Stateful constructor properties currently support non-null scalar types only');
+        // Property types widen beyond non-null scalars: arrays are managed
+        // objects and declared classes are object references (null-able), so
+        // both store directly in the property bag with zero ABI changes.
+        const fieldTypes = ['int', 'byte', 'short', 'ushort', 'sbyte', 'bool', 'string',
+          'int-array', 'bool-array', 'byte-array', 'short-array'];
+        if (stateful && !((!type.nullable && fieldTypes.includes(type.name)) || knownTypes.has(type.name)))
+          fail(type, 'Stateful constructor properties support scalar, array and declared class types');
         if (parameter.VAL() || parameter.VAR())
           fields.push({ name: token.value, type: type.name, mutable: Boolean(parameter.VAR()), token });
         return { token, type, defaultValue: null, vararg: false, field: true, modifiers };
@@ -688,6 +854,18 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
         ]}, modifiers: new Set(['public', 'static']), attributes: [], block: null,
         constructorType: name, fields: []
       });
+    }
+    // Members below carry executable semantics that this subset does not
+    // lower (init blocks run on construction, companion initializers on class
+    // load, secondary constructors on dispatch). Silently dropping them would
+    // miscompile side effects, so they are rejected up front.
+    for (const member of ctx.classBody()?.classMember() || []) {
+      if (typeof member.initializer === 'function' && member.initializer())
+        fail(location(member), 'Class init blocks are not supported by the P-code subset');
+      if (typeof member.companionObject === 'function' && member.companionObject())
+        fail(location(member), 'Companion objects are not supported by the P-code subset');
+      if (typeof member.secondaryConstructor === 'function' && member.secondaryConstructor())
+        fail(location(member), 'Secondary constructors are not supported by the P-code subset');
     }
     // Plain member properties with initializers become object fields appended
     // after any constructor-property fields. Members with unsupported types or
@@ -741,9 +919,19 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
         }] }, modifiers: new Set(['public']), attributes: [], block: null
       });
     }
+    const memberFunctions = [];
     for (const member of ctx.classBody()?.classMember() || []) {
       const functionDeclaration = member.functionDeclaration();
-      if (functionDeclaration) methods.push(readFunction(functionDeclaration, name));
+      if (functionDeclaration) {
+        if (typeof functionDeclaration.functionReceiver === 'function' && functionDeclaration.functionReceiver())
+          fail(location(functionDeclaration), 'Member extension functions are not supported by the P-code subset');
+        // Abstract members carry no executable body; concrete callers are
+        // diagnosed at their call sites when resolution fails.
+        if (!functionDeclaration.functionBody()) continue;
+        const method = readFunction(functionDeclaration, name);
+        methods.push(method);
+        memberFunctions.push(method);
+      }
       const property = member.propertyDeclaration();
       if (property?.propertyAccessor()?.length) {
         const accessor = property.propertyAccessor().find(item => item.GET());
@@ -759,13 +947,34 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
         }
       }
     }
+    // Members of stateful classes become instance methods: bare field reads
+    // route through the synthesized getters, field writes through setters, and
+    // sibling member calls dispatch on the implicit receiver. Object
+    // declarations keep their static lowering.
+    if (fields.length && typeof ctx.primaryConstructor === 'function' && memberFunctions.length) {
+      const memberNames = new Set(memberFunctions.map(method => method.name));
+      for (const method of memberFunctions) convertToInstanceMethod(method, name, fields, memberNames);
+    }
     typeParameters = new Set();
-    return { token: location(ctx.identifier()), name, modifiers: new Set(['public']), methods, constructors };
+    return { token: location(ctx.identifier()), name, modifiers: new Set(['public']), methods, constructors, supertypes };
   }
+
+  const pendingInference = [];
 
   function inferExpressionType(ctx, params) {
     const node = expression(ctx);
-    const localTypes = new Map(params.map(param => [param.token.value, param.type.name]));
+    const localTypes = new Map(params.map(param => [param.token.value, param.type]));
+    const type = inferValueType(node, localTypes, null);
+    if (type) return { name: type, ...location(ctx) };
+    // Defer: calls to functions declared elsewhere in the file resolve once
+    // every top-level return type is known. The placeholder object is shared
+    // by reference, so resolving it updates the owning method in place.
+    const placeholder = { name: '$pending-inference', ...location(ctx) };
+    pendingInference.push({ placeholder, node, localTypes, token: location(ctx) });
+    return placeholder;
+  }
+
+  function inferValueType(node, localTypes, returnTypesByName) {
     const infer = value => {
       if (value.kind === 'literal') return { int: 'int', bool: 'bool', string: 'string' }[value.literalType];
       if (value.kind === 'range-test') return 'bool';
@@ -773,7 +982,10 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
       if (value.kind === 'scalar-string') return 'string';
       if (value.kind === 'convert') return value.targetType;
       if (value.kind === 'overflow') return infer(value.value);
-      if (value.kind === 'name') return localTypes.get(value.name);
+      if (value.kind === 'name') {
+        const local = localTypes.get(value.name);
+        return local && local.name !== 'function' ? local.name : null;
+      }
       if (value.kind === 'unary') return value.op === '!' ? 'bool' : infer(value.value);
       if (value.kind === 'conditional') {
         const yes = infer(value.yes), no = infer(value.no);
@@ -784,41 +996,66 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
         const left = infer(value.left), right = infer(value.right);
         return left === 'string' || right === 'string' ? 'string' : 'int';
       }
-      if (value.kind === 'call' && value.name.startsWith('Console.')) return 'void';
+      if (value.kind === 'call') {
+        if (value.name.startsWith('Console.')) return 'void';
+        const invoked = localTypes.get(value.name) || localTypes.get(value.name.replace(/\.invoke$/, ''));
+        if (invoked?.name === 'function') return invoked.returnType?.name ?? null;
+        if (returnTypesByName) {
+          const declared = returnTypesByName.get(value.name);
+          if (declared && declared.name !== '$pending-inference') return declared.name;
+        }
+        return null;
+      }
       return null;
     };
-    const type = infer(node);
-    if (!type) fail(location(ctx), 'Expression-bodied functions need an explicit supported return type for this subset');
-    return { name: type, ...location(ctx) };
+    return infer(node);
   }
 
   const functions = [], classes = [];
+  const pendingExtensions = [];
+  const globalsInitStatements = [];
   const endpoints = [];
   for (const declaration of tree.topLevelDeclaration()) {
     const modifiers = declaration.declarationModifier();
     if (declaration.functionDeclaration()) {
       const method = readFunction(declaration.functionDeclaration());
       for (const modifier of modifiers) {
-        if (['suspend', 'tailrec'].includes(modifier.getText())) {
+        const text = modifier.getText();
+        if (['suspend', 'tailrec'].includes(text)) {
           // Direct-style subset: suspend functions run synchronously; tail
           // recursion keeps ordinary call frames and instruction budgets.
-          method.suspend = method.suspend || modifier.getText() === 'suspend';
+          method.suspend = method.suspend || text === 'suspend';
           continue;
         }
         const annotation = modifier.annotation();
-        const annotationName = annotation?.qualifiedIdentifier().getText().replace(/^pulse\.http\./, '');
+        if (!annotation) {
+          // Modifiers without single-module semantic weight are accepted and
+          // ignored; call-site checks still gate operator/infix conventions.
+          if (['inline', 'noinline', 'crossinline', 'private', 'public', 'internal',
+            'final', 'open', 'external', 'operator', 'infix'].includes(text)) continue;
+          fail(location(modifier), `Unsupported function modifier '${text}' in the P-code subset`);
+        }
+        const annotationName = annotation.qualifiedIdentifier().getText().replace(/^pulse\.http\./, '');
         const verb = httpAnnotations[annotationName];
-        if (!annotation || !verb || annotation.typeArguments() || annotation.identifier())
-          fail(location(modifier), 'Only HTTP method annotations are supported on Kotlin functions');
+        if (!verb) continue; // Unknown annotations carry no runtime behavior here.
+        if (annotation.typeArguments() || annotation.identifier())
+          fail(location(modifier), `@${annotationName} does not accept type arguments or use-site targets`);
         const args = annotation.valueArguments()?.valueArgument() || [];
         if (args.length !== 1 || args[0].identifier() || args[0].MUL())
           fail(location(annotation), `@${annotationName} requires one literal path string`);
         const value = expression(args[0].expression());
         if (value.kind !== 'literal' || value.literalType !== 'string')
           fail(location(annotation), `@${annotationName} requires one literal path string`);
-        if (method.typeParams.length || method.params.length || method.returnType.name !== 'string' || method.name === 'Main')
+        if (method.typeParams.length || method.params.length || method.returnType.name !== 'string'
+          || method.name === 'Main' || method.extensionReceiver)
           fail(method.token, `@${annotationName} handlers must be non-generic, take no parameters and return String`);
         endpoints.push({ verb, path: value.value, handler: method.name });
+      }
+      if (method.extensionReceiver) {
+        if (method.params.some(param => param.defaultValue))
+          fail(method.token, 'Extension functions cannot use default parameters in this subset');
+        pendingExtensions.push(method);
+        continue;
       }
       functions.push(method);
       for (let count = method.params.length - 1; count >= 0 && method.params[count].defaultValue; count--) {
@@ -851,9 +1088,49 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
       classes.push(owner);
       functions.push(...owner.constructors, ...owner.methods);
     }
-    else if (declaration.propertyDeclaration()) fail(location(declaration), 'Top-level properties are not supported by the P-code subset');
+    else if (declaration.propertyDeclaration()) {
+      const property = declaration.propertyDeclaration();
+      if (property.propertyAccessor()?.length)
+        fail(location(declaration), 'Top-level property accessors are not supported by the P-code subset');
+      if (!property.expression())
+        fail(location(declaration), 'Top-level properties require an initializer in this subset');
+      const declared = property.typeReference();
+      globalsInitStatements.push({
+        kind: 'declare', token: location(property), infer: !declared,
+        type: declared ? readType(declared) : { name: 'int' },
+        declarations: [{
+          token: location(property.identifier()), mutable: Boolean(property.VAR()),
+          value: expression(property.expression())
+        }]
+      });
+    }
     else if (!declaration.classDeclaration() && !declaration.objectDeclaration())
       fail(location(declaration), 'Only top-level functions and stateless classes are supported by the P-code subset');
+  }
+  // Top-level properties live in the machine's root frame: a synthetic init
+  // runs their declarations at MAIN before the entry point, and every
+  // procedure resolves unshadowed reads and writes through the frame chain.
+  if (globalsInitStatements.length) {
+    const token = globalsInitStatements[0].token;
+    functions.push({
+      token, name: '$GlobalsInit', owner: 'Program', returnType: { name: 'void', ...token },
+      typeParams: [], params: [], globalsInit: true,
+      body: { kind: 'block', token, statements: globalsInitStatements },
+      modifiers: new Set(['public', 'static']), attributes: [], block: null
+    });
+  }
+  // Attach extension functions to their receiver classes as synthesized
+  // members; stateful receivers get the full implicit-this conversion.
+  for (const method of pendingExtensions) {
+    const owner = classes.find(item => item.name === method.extensionReceiver);
+    if (!owner) fail(method.token, `Extension receiver '${method.extensionReceiver}' is not a class declared in this file`);
+    method.owner = owner.name;
+    const fields = owner.constructors[0]?.fields || [];
+    if (fields.length) {
+      const memberNames = new Set(owner.methods.filter(item => item.instance).map(item => item.name));
+      convertToInstanceMethod(method, owner.name, fields, memberNames);
+    }
+    owner.methods.push(method);
   }
   if (!endpoints.length && !functions.some(method => method.name === 'Main'))
     fail(location(tree), 'Kotlin source must declare fun main()');
@@ -874,6 +1151,30 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
   ];
   const unsupportedImport = imports.find(item => !supportedImports.includes(item.getText()));
   if (unsupportedImport) fail(location(unsupportedImport), 'Unsupported Kotlin import in the P-code subset');
+  if (pendingInference.length) {
+    const returnTypesByName = new Map();
+    for (const owner of classes) for (const method of owner.methods)
+      if (!returnTypesByName.has(method.name)) returnTypesByName.set(method.name, method.returnType);
+    for (const method of functions)
+      if (!returnTypesByName.has(method.name)) returnTypesByName.set(method.name, method.returnType);
+    for (const pending of pendingInference) {
+      const type = inferValueType(pending.node, pending.localTypes, returnTypesByName);
+      if (!type || type === '$pending-inference')
+        fail(pending.token, 'Expression-bodied functions need an explicit supported return type for this subset');
+      pending.placeholder.name = type;
+    }
+  }
+  const forbidStrayThis = node => {
+    if (!node || typeof node !== 'object') return;
+    if (node.kind === 'this')
+      fail(node.token, "'this' is only supported inside members of classes with properties");
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) value.forEach(forbidStrayThis);
+      else if (value && typeof value === 'object') forbidStrayThis(value);
+    }
+  };
+  for (const method of functions) forbidStrayThis(method.body);
+  for (const owner of classes) for (const method of owner.methods) if (!method.instance) forbidStrayThis(method.body);
   inlineFunctionValues(functions, classes, fileName);
   return {
     token: location(tree),
@@ -924,7 +1225,7 @@ function inlineFunctionValues(functions, classes, fileName) {
 
   function bodyUsesCoroutineSyntax(node) {
     if (!node || typeof node !== 'object') return false;
-    if (node.kind === 'lambda' || node.kind === 'throw') return true;
+    if (node.kind === 'lambda' || node.kind === 'throw' || node.kind === 'callable-reference') return true;
     if (node.kind === 'call' && (SUSPENSION_INTRINSICS.has(node.name) || CONTINUATION_HELPERS.has(node.name)
       || node.name === 'startCoroutine')) return true;
     return Object.values(node).some(value => Array.isArray(value)
@@ -933,13 +1234,35 @@ function inlineFunctionValues(functions, classes, fileName) {
 
   const isTemplateCall = node => node?.kind === 'call' && !node.receiver && templates.has(node.name);
 
+  // Lowers a callable reference used where a function value is expected into
+  // an equivalent synthesized lambda: ::foo becomes { a, b -> foo(a, b) },
+  // recv::foo forwards through the receiver, and Stateful::foo takes the
+  // receiver as its first parameter. Pure compile-time rewriting.
+  function referenceLambda(node, paramTypes) {
+    if (node?.kind !== 'callable-reference') return node;
+    const token = node.token;
+    const prefix = `$ref${serial++}p`;
+    const params = paramTypes.map((_, index) => ({ token: { ...token, value: `${prefix}${index}` }, type: null }));
+    const args = params.map(param => ({ kind: 'name', token: param.token, name: param.token.value }));
+    let receiver = node.receiver;
+    if (receiver?.kind === 'name' && members.get(receiver.name)?.fields.size) receiver = args.shift();
+    const name = node.member === 'println' ? 'Console.WriteLine'
+      : node.member === 'print' ? 'Console.Write' : node.member;
+    const call = { kind: 'call', token, name, args, typeArgs: [], receiver, safe: false };
+    return { kind: 'lambda', token, params,
+      body: { kind: 'block', token, statements: [{ kind: 'expressions', token, values: [call] }] } };
+  }
+
   function lambdaStatements(lambda, token, args = [], paramTypes = []) {
     if (lambda?.kind !== 'lambda') fail(token, 'Function-typed arguments must be lambda literals in this subset');
-    const params = lambda.params || [];
-    if (params.length !== args.length)
-      fail(lambda.token, `This lambda takes ${params.length} parameter(s) but ${args.length} argument(s) were supplied`);
     const body = structuredClone(lambda.body);
     forbidReturns(body);
+    // A lambda without a parameter list binds a single argument as `it`.
+    let params = lambda.params || [];
+    if (!params.length && args.length === 1)
+      params = [{ token: { ...lambda.token, value: 'it' }, type: null }];
+    if (params.length !== args.length)
+      fail(lambda.token, `This lambda takes ${params.length} parameter(s) but ${args.length} argument(s) were supplied`);
     // Per-splice renaming keeps repeated inlining of one lambda from colliding.
     const sub = { prefix: `$lam${serial++}$`, renames: new Map(), bindings: new Map(), sawReturn: false };
     const declares = [];
@@ -1165,11 +1488,13 @@ function inlineFunctionValues(functions, classes, fileName) {
     const sub = { prefix, renames: new Map(), bindings: new Map(), sawReturn: false };
     const statements = [];
     for (const [index, param] of template.params.entries()) {
-      const argument = call.args[index];
+      const argument = isFunctionType(param.type)
+        ? referenceLambda(call.args[index], param.type.paramTypes) : call.args[index];
       if (isFunctionType(param.type)) {
         if (argument?.kind !== 'lambda')
           fail(call.token, 'Function-typed arguments must be lambda literals in this subset');
-        if ((argument.params?.length || 0) !== param.type.paramTypes.length)
+        if ((argument.params?.length || 0) !== param.type.paramTypes.length
+          && !(!argument.params?.length && param.type.paramTypes.length === 1))
           fail(argument.token, `${param.token.value} requires a lambda with ${param.type.paramTypes.length} parameter(s)`);
         sub.bindings.set(param.token.value, { lambda: argument, paramTypes: param.type.paramTypes,
           receiver: param.type.receiver ?? null });
@@ -1231,6 +1556,8 @@ function inlineFunctionValues(functions, classes, fileName) {
     if (!node.kind) return;
     if (node.kind === 'lambda')
       fail(node.token, 'Lambdas are only supported as arguments to functions with function-typed parameters');
+    if (node.kind === 'callable-reference')
+      fail(node.token, 'Callable references are only supported where function-typed arguments are expected');
     if (node.kind === 'invoke-lambda' || node.kind === 'start-coroutine')
       fail(node.token, 'Inlined function values may only be invoked as statements');
     if (node.kind === 'throw' && !guarded && node.value?.kind === 'call' && !node.value.receiver
@@ -1260,6 +1587,17 @@ function inlineFunctionValues(functions, classes, fileName) {
     return statements.flatMap(node => rewriteStatement(node, depth, guarded));
   }
 
+  // Splices a bound-lambda invocation used as a value: the lambda body runs as
+  // statements and its trailing expression becomes the value at the use site.
+  function spliceLambdaValue(marker, depth, guarded) {
+    marker.args?.forEach(argument => checkExpression(argument, guarded));
+    const spliced = lambdaStatements(marker.lambda, marker.token, marker.args ?? [], marker.paramTypes ?? []);
+    const last = spliced.at(-1);
+    if (last?.kind !== 'expressions' || last.values.length !== 1)
+      fail(marker.token, 'This lambda must end in a single expression to produce a value');
+    return { statements: rewriteStatements(spliced.slice(0, -1), depth, guarded), value: last.values[0] };
+  }
+
   function rewriteEmbedded(node, depth, guarded = false) {
     if (!node) return node;
     const rewritten = rewriteStatement(node, depth, guarded);
@@ -1286,8 +1624,13 @@ function inlineFunctionValues(functions, classes, fileName) {
           catches: node.catches.map(handler => ({ ...handler, body: rewriteEmbedded(handler.body, depth, guarded) })),
           finallyBody: node.finallyBody ? rewriteEmbedded(node.finallyBody, depth, guarded) : null }];
       case 'return': {
+        if (node.value?.kind === 'invoke-lambda') {
+          const result = spliceLambdaValue(node.value, depth, guarded);
+          return [...result.statements,
+            ...rewriteStatements([{ ...node, value: result.value }], depth, guarded)];
+        }
         if (isTemplateCall(node.value)) {
-          node.value.args.forEach(argument => { if (argument.kind !== 'lambda') checkExpression(argument, guarded); });
+          node.value.args.forEach(argument => { if (argument.kind !== 'lambda' && argument.kind !== 'callable-reference') checkExpression(argument, guarded); });
           const { statements, resultName } = expand(node.value, depth);
           const value = resultName
             ? { kind: 'name', token: { ...node.token, value: resultName }, name: resultName } : null;
@@ -1302,6 +1645,11 @@ function inlineFunctionValues(functions, classes, fileName) {
       case 'declare': {
         const preceding = [];
         for (const item of node.declarations) {
+          while (item.value?.kind === 'invoke-lambda') {
+            const result = spliceLambdaValue(item.value, depth, guarded);
+            preceding.push(...result.statements);
+            item.value = result.value;
+          }
           const lowered = lowerResumeImmediately(item.value);
           if (lowered) {
             if (!lowered.value) fail(item.token, 'A Unit intrinsic cannot initialize a local variable');
@@ -1310,7 +1658,7 @@ function inlineFunctionValues(functions, classes, fileName) {
             continue;
           }
           if (!isTemplateCall(item.value)) { checkExpression(item.value, guarded); continue; }
-          item.value.args.forEach(argument => { if (argument.kind !== 'lambda') checkExpression(argument, guarded); });
+          item.value.args.forEach(argument => { if (argument.kind !== 'lambda' && argument.kind !== 'callable-reference') checkExpression(argument, guarded); });
           const { statements, resultName } = expand(item.value, depth);
           if (!resultName) fail(item.token, 'A Unit builder cannot initialize a local variable');
           preceding.push(...statements);
@@ -1322,6 +1670,11 @@ function inlineFunctionValues(functions, classes, fileName) {
         const output = [];
         const remaining = [];
         for (const value of node.values) {
+          while (value.kind === 'assign' && value.op === '=' && value.right?.kind === 'invoke-lambda') {
+            const result = spliceLambdaValue(value.right, depth, guarded);
+            output.push(...result.statements);
+            value.right = result.value;
+          }
           const lowered = lowerResumeImmediately(value)
             ?? (value.kind === 'assign' && value.op === '=' ? lowerResumeImmediately(value.right) : null);
           if (lowered) {
@@ -1337,7 +1690,7 @@ function inlineFunctionValues(functions, classes, fileName) {
             continue;
           }
           if (value.kind === 'assign' && value.op === '=' && isTemplateCall(value.right)) {
-            value.right.args.forEach(argument => { if (argument.kind !== 'lambda') checkExpression(argument, guarded); });
+            value.right.args.forEach(argument => { if (argument.kind !== 'lambda' && argument.kind !== 'callable-reference') checkExpression(argument, guarded); });
             const { statements, resultName } = expand(value.right, depth);
             if (!resultName) fail(value.token, 'A Unit builder cannot be assigned');
             output.push(...statements);
@@ -1352,7 +1705,7 @@ function inlineFunctionValues(functions, classes, fileName) {
             continue;
           }
           if (isTemplateCall(value)) {
-            value.args.forEach(argument => { if (argument.kind !== 'lambda') checkExpression(argument, guarded); });
+            value.args.forEach(argument => { if (argument.kind !== 'lambda' && argument.kind !== 'callable-reference') checkExpression(argument, guarded); });
             output.push(...expand(value, depth).statements);
           } else if (value.kind === 'invoke-lambda') {
             value.args?.forEach(argument => checkExpression(argument, guarded));

@@ -26,8 +26,14 @@ export function stripDiagnosticMarkers(source) {
   return { source: clean + source.slice(position), markers };
 }
 
+export function normalizeFixtureSource(source) {
+  return source.split(/\r?\n/)
+    .filter(line => !/^\s*\/\/\s*(?:FILE|MODULE):/.test(line))
+    .join('\n');
+}
+
 export async function runFixture(root, fixture, executionTarget) {
-  const original = await readFixture(root, fixture);
+  const original = normalizeFixtureSource(await readFixture(root, fixture));
   if (fixture.kind === 'diagnostic') {
     const { source, markers } = stripDiagnosticMarkers(original);
     const expected = markers.find(marker => marker.names.includes('VAL_REASSIGNMENT'));

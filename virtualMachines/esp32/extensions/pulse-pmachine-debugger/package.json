@@ -18,6 +18,7 @@
     "mnf-language-configuration.json",
     "*-language-configuration.json",
     "media/**",
+    "samples/**",
     "syntaxes/**",
     "out/**",
     "node_modules/**"
@@ -33,6 +34,7 @@
     "onDebug",
     "onCommand:pulse-pmachine.runCurrentFile",
     "onCommand:pulse-pmachine.debugCurrentFile",
+    "onView:pulseCatalogStudio.dataLibrarian",
     "onLanguage:pascalish",
     "onLanguage:pascal",
     "onLanguage:vbish",
@@ -61,18 +63,14 @@
           "visibility": "visible"
         },
         {
-          "id": "pulseCatalogStudio.infrastructure",
-          "name": "Infrastructure"
-        },
-        {
-          "id": "pulseCatalogStudio.sidebar",
-          "name": "Data Librarian",
+          "id": "pulseCatalogStudio.servers",
+          "name": "Servers",
           "type": "tree",
           "visibility": "visible"
         },
         {
-          "id": "pulseCatalogStudio.esp32Librarian",
-          "name": "Data Librarian (ESP32)",
+          "id": "pulseCatalogStudio.dataLibrarian",
+          "name": "Data Librarian",
           "type": "tree",
           "visibility": "visible"
         },
@@ -107,6 +105,12 @@
         {
           "id": "pulse-pmachine.servers",
           "name": "Pulse Servers"
+        },
+        {
+          "id": "pulse-pmachine.connections",
+          "name": "Pulse Connections",
+          "type": "tree",
+          "visibility": "visible"
         }
       ]
     },
@@ -347,6 +351,14 @@
         "title": "Pulse: New Language Document"
       },
       {
+        "command": "pulse-pmachine.createConnectionString",
+        "title": "Pulse: Create Connection String"
+      },
+      {
+        "command": "pulse-pmachine.openConnectionEndpoint",
+        "title": "Pulse: Open Connection Endpoint"
+      },
+      {
         "command": "pulseCatalogStudio.openIssues",
         "title": "Pulse: Open Issue Board"
       },
@@ -390,11 +402,6 @@
         "icon": "$(refresh)"
       },
       {
-        "command": "pulseCatalogStudio.refreshInfrastructure",
-        "title": "Pulse: Refresh Infrastructure Tree",
-        "icon": "$(refresh)"
-      },
-      {
         "command": "pulseCatalogStudio.refreshNodeInventory",
         "title": "Pulse: Refresh Node Inventory",
         "icon": "$(refresh)"
@@ -435,15 +442,6 @@
       {
         "command": "pulse-pmachine.showDataLibrarian",
         "title": "Pulse Data Librarian: Browse Schemas"
-      },
-      {
-        "command": "pulse-pmachine.refreshEsp32Librarian",
-        "title": "Pulse: Refresh ESP32 Data Librarian",
-        "icon": "$(refresh)"
-      },
-      {
-        "command": "pulse-pmachine.openEsp32LibrarianSchema",
-        "title": "Pulse: Open ESP32 Schema Metadata"
       },
       {
         "command": "pulse-pmachine.refreshLibrarian",
@@ -509,6 +507,11 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "pulse-pmachine.runActiveFileOnSwarmNode",
+        "title": "Run Active File on This PMachine",
+        "icon": "$(play)"
+      },
+      {
         "command": "pulse-pmachine.openServiceEndpoint",
         "title": "Pulse Services: Open Endpoint",
         "icon": "$(link-external)"
@@ -570,13 +573,13 @@
           "group": "navigation"
         },
         {
-          "command": "pulseCatalogStudio.refreshDataLibrarian",
-          "when": "view == pulseCatalogStudio.sidebar",
+          "command": "pulse-pmachine.refreshServers",
+          "when": "view == pulseCatalogStudio.servers",
           "group": "navigation"
         },
         {
-          "command": "pulseCatalogStudio.refreshInfrastructure",
-          "when": "view == pulseCatalogStudio.infrastructure",
+          "command": "pulseCatalogStudio.refreshDataLibrarian",
+          "when": "view == pulseCatalogStudio.dataLibrarian",
           "group": "navigation"
         },
         {
@@ -595,11 +598,6 @@
           "group": "navigation"
         },
         {
-          "command": "pulse-pmachine.refreshEsp32Librarian",
-          "when": "view == pulseCatalogStudio.esp32Librarian",
-          "group": "navigation"
-        },
-        {
           "command": "pulse-pmachine.refreshLibrarian",
           "when": "view == pulse-pmachine.dataLibrarian",
           "group": "navigation"
@@ -613,9 +611,19 @@
           "command": "pulse-pmachine.refreshServers",
           "when": "view == pulse-pmachine.servers",
           "group": "navigation"
+        },
+        {
+          "command": "pulse-pmachine.refreshConnections",
+          "when": "view == pulse-pmachine.connections",
+          "group": "navigation"
         }
       ],
       "view/item/context": [
+        {
+          "command": "pulse-pmachine.runActiveFileOnSwarmNode",
+          "when": "view == pulseCatalogStudio.swarm && viewItem == pulseSwarmNode",
+          "group": "1_run"
+        },
         {
           "command": "pulseCatalogStudio.deployNetworkCache",
           "when": "view == pulseCatalogStudio.deploy && viewItem == network-cache-deployment",
@@ -663,17 +671,22 @@
         },
         {
           "command": "pulse-pmachine.openLibrarianSchema",
-          "when": "(view == pulseCatalogStudio.sidebar || view == pulse-pmachine.dataLibrarian) && viewItem == pulseLibrarianSchema",
-          "group": "1_open"
-        },
-        {
-          "command": "pulse-pmachine.openEsp32LibrarianSchema",
-          "when": "view == pulseCatalogStudio.esp32Librarian && viewItem == pulseEsp32LibrarianSchema",
+          "when": "(view == pulseCatalogStudio.dataLibrarian || view == pulse-pmachine.dataLibrarian) && viewItem == pulseLibrarianSchema",
           "group": "1_open"
         },
         {
           "command": "pulse-pmachine.openServiceEndpoint",
           "when": "(view == pulse-pmachine.services || view == pulse-pmachine.servers) && viewItem == pulseServiceEndpoint",
+          "group": "inline"
+        },
+        {
+          "command": "pulse-pmachine.createConnectionString",
+          "when": "view == pulse-pmachine.connections && viewItem == pulseConnectionUndefined",
+          "group": "1_manage"
+        },
+        {
+          "command": "pulse-pmachine.openConnectionEndpoint",
+          "when": "view == pulse-pmachine.connections && viewItem == pulseConnection",
           "group": "inline"
         }
       ],
@@ -755,6 +768,36 @@
           "type": "string",
           "default": "http://127.0.0.1:4000",
           "description": "Aggregator backend URL used by Data Librarian, Data Mapper, service discovery, and PMachine programs."
+        },
+        "pulse-pmachine.connections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "name", "kind", "endpoint"],
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "kind": { "type": "string" },
+              "endpoint": { "type": "string" },
+              "updatedAt": { "type": "string" }
+            }
+          },
+          "default": [],
+          "description": "Workspace Pulse service connection definitions. Create these from the Pulse Connections Explorer view."
+        },
+        "pulse-pmachine.connectionServices": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "name"],
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "kind": { "type": "string" }
+            }
+          },
+          "default": [],
+          "description": "Additional Pulse service types to show in the Connections Explorer view."
         },
         "pulse-pmachine.fortranInput": {
           "type": "string",

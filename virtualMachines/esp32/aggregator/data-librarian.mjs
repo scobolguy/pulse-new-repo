@@ -10,7 +10,6 @@ import { createPascalishCatalogStore } from './src/librarian/catalog-store.mjs';
 import { createPascalishXsdParser } from './src/librarian/xsd-parser.mjs';
 import { createSchemaStructureCache } from './src/librarian/schema-structure-cache.mjs';
 import { createSchemaPageStore, schemaPageKey } from './src/librarian/schema-page-store.mjs';
-import { createFilesystemServiceClient } from './src/librarian/filesystem-service-client.mjs';
 import { createPascalishSchemaTreeService } from './src/librarian/schema-tree-service.mjs';
 import { createPascalishSchemaStructureService } from './src/librarian/schema-structure-service.mjs';
 import { createPascalishLibrarianNormalization } from './src/librarian/normalization.mjs';
@@ -31,26 +30,11 @@ import {
 
 const app = express();
 app.use(express.json());
-const filesystemEndpoint = readEnvString('LIBRARIAN_FILESYSTEM_SERVICE_URL')
-  || JSON.parse(process.env.PULSE_SERVICE_BINDINGS || '{}')['pulse-filesystem']?.endpoint
-  || `http://127.0.0.1:${readEnvNumber('FILESYSTEM_PORT', 4302)}`;
-const filesystemBinding = JSON.parse(process.env.PULSE_SERVICE_BINDINGS || '{}')['pulse-filesystem'];
-if (filesystemBinding && new URL(filesystemBinding.endpoint).href.replace(/\/$/, '') !== new URL(filesystemEndpoint).href.replace(/\/$/, '')) {
-  throw new Error('LIBRARIAN_FILESYSTEM_SERVICE_URL must match the pulse-filesystem lifecycle binding endpoint');
-}
 const lifecycle = await createServiceLifecycleRuntime({
   config: readServiceLifecycleConfig({
-    serviceId: 'pulse-data-librarian', requires: ['pulse-filesystem'],
-    intrinsicBindings: {
-      'pulse-filesystem': {
-        instanceId: 'external:pulse-filesystem', endpoint: filesystemEndpoint,
-        readinessUrl: `${filesystemEndpoint.replace(/\/+$/, '')}/ready`,
-      },
-    },
+    serviceId: 'pulse-data-librarian', requires: [],
   }),
-  usefulOperations: {
-    'pulse-filesystem': { path: '/schemas/page', method: 'POST', body: { path: '', cursor: '', limit: 1 } },
-  },
+  usefulOperations: {},
 });
 installServiceLifecycleMiddleware(app, lifecycle);
 
@@ -684,10 +668,10 @@ app.get('/api/librarian/schema-tree/page', async (req, res) => {
     if (req.query.revision && req.query.revision !== manifest.revision) {
       return res.status(409).json({ error: 'Schema tree revision changed; reload the root' });
     }
-    const result = await filesystemTreeClient.schemaTreePage({
-      schemaKey: manifest.schemaKey, revision: manifest.revision,
-      nodeId: req.query.nodeId || 'n0', cursor: req.query.cursor || '0',
-    });
+    const result = await schemaPageStore.readPage(
+      manifest.schemaKey, manifest.revision,
+      req.query.nodeId || 'n0', req.query.cursor || '0',
+    );
     return res.json(result);
   } catch (error) {
     return res.status(error.status || 500).json({ error: error.message });
@@ -1302,19 +1286,16 @@ const PORT = process.env.LIBRARIAN_PORT === '0' ? 0 : readEnvNumber('LIBRARIAN_P
 await ensureLibrarianStorageLayout();
 const PREDIGESTED_XSD_ROOT = path.join(LIBRARIAN_SERVICE_ROOT, 'predigested-xsd');
 const schemaPageStore = createSchemaPageStore(path.join(LIBRARIAN_SERVICE_ROOT, 'schema-pages'));
-const filesystemTreeClient = createFilesystemServiceClient(filesystemEndpoint);
 await fs.mkdir(PREDIGESTED_XSD_ROOT, { recursive: true });
 catalogStore = await createPascalishCatalogStore({
   root: LIBRARIAN_SERVICE_ROOT, legacyRoot: DATA_ROOT,
   maxFileBytes: readEnvNumber('LIBRARIAN_CATALOG_MAX_BYTES', 262144),
-  filesystemServiceUrl: filesystemEndpoint
 });
 
 subschemaPolicyHost = await startSubschemaPolicyHost();
 xsdParser = await createPascalishXsdParser({
   schemaRoot: SCHEMA_ROOT,
   predigestedRoot: PREDIGESTED_XSD_ROOT,
-  filesystemServiceUrl: filesystemEndpoint
 });
 schemaStructureCache = createSchemaStructureCache({
   schemaRoot: SCHEMA_ROOT,

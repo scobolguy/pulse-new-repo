@@ -71,7 +71,7 @@ annotation
     ;
 
 classDeclaration
-    : (CLASS | INTERFACE) identifier typeParameters? primaryConstructor?
+    : (CLASS | FUN? INTERFACE) identifier typeParameters? primaryConstructor?
       typeConstraints? delegationSpecifiers? classBody?
     ;
 
@@ -144,13 +144,18 @@ delegationSpecifier
     ;
 
 functionDeclaration
-    : FUN typeParameters? identifier valueParameters
-      (COLON typeReference)? typeConstraints? functionBody
+    : FUN typeParameters? (functionReceiver DOT)? identifier valueParameters
+      (COLON typeReference)? typeConstraints? functionBody?
+    ;
+
+functionReceiver
+    : userType QUESTION?
+    | LPAREN typeReference RPAREN
     ;
 
 functionBody
     : block
-    | ASSIGN expression
+    | ASSIGN NEWLINE* expression
     ;
 
 propertyDeclaration
@@ -197,6 +202,8 @@ parameterModifier
     | VARARG
     | NOINLINE
     | CROSSINLINE
+    | OVERRIDE
+    | visibilityModifier
     ;
 
 typeReference
@@ -241,7 +248,7 @@ statement
       SEMI?
     | loopStatement
     | ifStatement
-    | expression SEMI?
+    | (annotation NEWLINE*)* expression SEMI?
     ;
 
 ifStatement

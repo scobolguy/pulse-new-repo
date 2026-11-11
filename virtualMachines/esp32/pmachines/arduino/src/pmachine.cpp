@@ -1317,6 +1317,11 @@ static Instructions parseTextPCode(const std::string& text, bool hosted = false)
             lss >> targetLabel;
             instr.label = targetLabel;
             unresolvedJumps.push_back({instructions.size(), targetLabel});
+        } else if (opcode == pmachine::OP_TRY_BEGIN) {
+            std::string targetLabel;
+            lss >> targetLabel;
+            instr.label = targetLabel;
+            unresolvedJumps.push_back({instructions.size(), targetLabel});
         } else if (opcode == pmachine::OP_LOAD_NAME || opcode == pmachine::OP_STORE_NAME || opcode == pmachine::OP_PUSH_REF ||
                    opcode == pmachine::OP_MAP_RETURN) {
             std::string name;
@@ -1527,6 +1532,16 @@ void PMachine::runInstructions(size_t instructionCount,
         size_t envDepth = 1;
     };
     std::vector<NameCallFrame> nameCallStack;
+    struct ExceptionFrame {
+        size_t frameDepth = 1;
+        size_t callDepth = 0;
+        size_t stackDepth = 0;
+        int targetPc = -1;
+    };
+    std::vector<ExceptionFrame> exceptionFrames;
+    struct PCodeException {
+        Value value;
+    };
     const uint32_t hostedStartedAt = millis();
     if (!hostCallHook) nameCallStack.reserve(INITIAL_NAME_FRAME_CAPACITY);
     std::string currentOutputLine;
@@ -2270,6 +2285,35 @@ void PMachine::runInstructions(size_t instructionCount,
     running = true;
     this->pc = 0;
     PMTRACE(Serial.println("[DEBUG] Executing pinstructions:"));
+    auto resumeException = [&](const Value& value) -> bool {
+        if (exceptionFrames.empty()) return false;
+        const ExceptionFrame frame = exceptionFrames.back();
+        exceptionFrames.pop_back();
+        if (hostedFrames) {
+            while (hostedFrames->depth() > frame.frameDepth) {
+                int ignoredReturnPc = 0;
+                if (!hostedFrames->pop(ignoredReturnPc)) return false;
+            }
+        } else {
+            while (nameCallStack.size() > frame.callDepth) {
+                nameCallStack.pop_back();
+                if (nameFrames.size() > 1) {
+                    nameFrames.pop_back();
+                    nameFrameIdentities.pop_back();
+                }
+            }
+            while (nameFrames.size() > frame.frameDepth && nameFrames.size() > 1) {
+                nameFrames.pop_back();
+                nameFrameIdentities.pop_back();
+            }
+        }
+        if (sp < 0 || frame.stackDepth > static_cast<size_t>(STACK_SIZE)) return false;
+        sp = static_cast<int>(frame.stackDepth);
+        stack[sp++] = value;
+        pc = frame.targetPc;
+        return pc >= 0;
+    };
+    bool resumeAfterException = false;
     int resumedPc = -1;
     if (!extendedAllocationError.empty()) {
         gFlowState["__runtime_error"] = extendedAllocationError;
@@ -2286,6 +2330,8 @@ void PMachine::runInstructions(size_t instructionCount,
         gFlowState["__runtime_error"] = "Invalid or unsupported execution checkpoint";
         goto pmachineRunExit;
     }
+    do {
+    resumeAfterException = false;
     try {
     while (pc < (int)instructionCount) {
         if (!reconcileObjects()) {
@@ -3165,6 +3211,34 @@ void PMachine::runInstructions(size_t instructionCount,
             ++pc;
             continue;
         }
+        case OP_TRY_BEGIN: {
+            ExceptionFrame frame;
+            frame.frameDepth = hostedFrames ? hostedFrames->depth() : nameFrames.size();
+            frame.callDepth = nameCallStack.size();
+            frame.stackDepth = static_cast<size_t>(sp);
+            frame.targetPc = instr.intOperand;
+            exceptionFrames.push_back(frame);
+            ++pc;
+            continue;
+        }
+        case OP_TRY_END: {
+            const size_t currentFrameDepth = hostedFrames ? hostedFrames->depth() : nameFrames.size();
+            if (exceptionFrames.empty() || exceptionFrames.back().frameDepth != currentFrameDepth) {
+                gFlowState["__runtime_error"] = "P-code exception frame mismatch";
+                goto pmachineRunExit;
+            }
+            exceptionFrames.pop_back();
+            ++pc;
+            continue;
+        }
+        case OP_RETHROW: {
+            if (sp <= 0) {
+                gFlowState["__runtime_error"] = "P-code RETHROW stack underflow";
+                goto pmachineRunExit;
+            }
+            const Value value = stack[--sp];
+            throw PCodeException{value};
+        }
         case OP_CALL_LABEL: {
             if (!invokeCallFrame(instr.intOperand, instr.label, instr.value)) {
                 if (hostedStorageError) goto pmachineRunExit;
@@ -3228,6 +3302,13 @@ void PMachine::runInstructions(size_t instructionCount,
                 for (int index = 0; index < instr.value; ++index) {
                     args[index].value = stack[sp - instr.value + index];
                     if (args[index].value.isString()) args[index].text = stringAt(args[index].value);
+                }
+                if (symbol == "system.exception.throw") {
+                    if (instr.value != 1) {
+                        gFlowState["__runtime_error"] = "Kotlin throw requires one value";
+                        goto pmachineRunExit;
+                    }
+                    throw PCodeException{args[0].value};
                 }
                 std::string error;
                 if (!executeSystemIntrinsic(symbol, args, static_cast<size_t>(instr.value), result, error)) {
@@ -4361,9 +4442,27 @@ void PMachine::runInstructions(size_t instructionCount,
         }
     }
     }
+    } catch (const PCodeException& failure) {
+        if (!resumeException(failure.value)) {
+            gFlowState["__runtime_error"] = "Unhandled P-code exception";
+        } else {
+            resumeAfterException = true;
+        }
     } catch (const pmachine::rtl::detail::VmError& failure) {
-        gFlowState["__runtime_error"] = failure.what();
+        if (!exceptionFrames.empty()) {
+            const ExceptionFrame frame = exceptionFrames.back();
+            if (resumeException(Value())) {
+                sp = static_cast<int>(frame.stackDepth);
+                pushString(failure.what());
+                resumeAfterException = true;
+            } else {
+                gFlowState["__runtime_error"] = failure.what();
+            }
+        } else {
+            gFlowState["__runtime_error"] = failure.what();
+        }
     }
+    } while (resumeAfterException);
     pmachineRunExit:
         if (lastRunSuspended) {
             this->pc = static_cast<uint16_t>(std::max(0, pc));

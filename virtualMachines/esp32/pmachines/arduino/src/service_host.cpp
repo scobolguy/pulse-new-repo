@@ -523,7 +523,7 @@ bool ServiceHost::validateUnit(const JsonDocument& map, const char* kind, Unit& 
         case OP_CALL_LABEL:
             if (instruction.value < 0 || instruction.value > 8) { error = "Invalid call arity"; return false; }
             // Fall through to validate the resolved local target.
-        case OP_JMP: case OP_JZ:
+        case OP_JMP: case OP_JZ: case OP_TRY_BEGIN:
             if (instruction.intOperand < 0 || instruction.intOperand >= static_cast<int>(count)) {
                 error = "Invalid hosted branch target"; return false;
             }
@@ -535,6 +535,7 @@ bool ServiceHost::validateUnit(const JsonDocument& map, const char* kind, Unit& 
         case OP_CONCAT: case OP_STREQ: case OP_STRNEQ: case OP_EQ: case OP_NEQ: case OP_LT:
         case OP_LE: case OP_GT: case OP_GE: case OP_OR: case OP_AND: case OP_NOT:
         case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_NOP:
+        case OP_TRY_END: case OP_RETHROW:
             break;
         default: error = "Opcode unavailable in bounded ESP32 host"; return false;
         }

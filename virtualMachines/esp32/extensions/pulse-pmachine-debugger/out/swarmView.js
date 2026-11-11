@@ -4,21 +4,49 @@ export class SwarmViewProvider {
     output;
     changes = new vscode.EventEmitter();
     onDidChangeTreeData = this.changes.event;
+    rootItems;
+    rootLoading = false;
     constructor(output) {
         this.output = output;
     }
-    refresh() { this.changes.fire(undefined); }
+    refresh() { this.rootItems = undefined; this.rootLoading = false; this.changes.fire(undefined); }
     dispose() { this.changes.dispose(); }
     getTreeItem(item) { return item; }
     async getChildren(item) {
         if (item)
             return [];
+        if (this.rootItems)
+            return this.rootItems;
+        if (this.rootLoading)
+            return [new vscode.TreeItem('Loading Swarm...')];
+        this.rootLoading = true;
+        void this.loadRoot().then(items => {
+            this.rootItems = items;
+            this.rootLoading = false;
+            this.changes.fire(undefined);
+        }, error => {
+            this.rootItems = [new vscode.TreeItem(`Swarm unavailable - ${error instanceof Error ? error.message : String(error)}`)];
+            this.rootLoading = false;
+            this.changes.fire(undefined);
+        });
+        return [new vscode.TreeItem('Loading Swarm...')];
+    }
+    async loadRoot() {
         const base = vscode.workspace.getConfiguration('pulse-pmachine')
             .get('backendUrl', 'http://127.0.0.1:4000').trim();
         try {
             const nodes = await loadSwarmNodes(base);
-            return nodes.length ? nodes.map(node => this.nodeItem(node))
-                : [new vscode.TreeItem('No available p-code nodes')];
+            return [
+                this.nodeItem({
+                    id: 'local-js',
+                    name: 'Local JavaScript PMachine',
+                    address: 'Local',
+                    runtime: 'JavaScript',
+                    key: 'js',
+                    local: true,
+                }),
+                ...nodes.map(node => this.nodeItem(node)),
+            ];
         }
         catch (error) {
             const detail = error instanceof Error ? error.message : String(error);
@@ -26,7 +54,14 @@ export class SwarmViewProvider {
             const unavailable = new vscode.TreeItem('Swarm unavailable - refresh to retry');
             unavailable.tooltip = detail;
             unavailable.iconPath = new vscode.ThemeIcon('warning');
-            return [unavailable];
+            return [this.nodeItem({
+                id: 'local-js',
+                name: 'Local JavaScript PMachine',
+                address: 'Local',
+                runtime: 'JavaScript',
+                key: 'js',
+                local: true,
+            }), unavailable];
         }
     }
     nodeItem(node) {
@@ -36,6 +71,7 @@ export class SwarmViewProvider {
         item.tooltip = `${node.name}\n${node.id}\n${node.address}\n${node.runtime}\nAvailable for p-code execution`;
         item.iconPath = new vscode.ThemeIcon('server', new vscode.ThemeColor('testing.iconPassed'));
         item.contextValue = 'pulseSwarmNode';
+        item.node = node;
         return item;
     }
 }

@@ -8,10 +8,10 @@ import { pathToFileURL } from 'node:url';
 import * as vscode from 'vscode';
 import { HanoiPanel, looksLikeHanoi } from './hanoiPanel.js';
 import { ServicesViewProvider, openServiceEndpoint } from './servicesView.js';
+import { ConnectionsViewProvider, createConnectionString, openConnectionEndpoint } from './connectionsView.js';
 import { SwarmViewProvider } from './swarmView.js';
 import { registerDataMapper } from './dataMapperEditor.js';
 import { DataLibrarianViewProvider, openLibrarianSchema } from './dataLibrarianView.js';
-import { Esp32LibrarianViewProvider, openEsp32LibrarianSchema } from './esp32LibrarianView.js';
 import { findPmachineRoot } from './runtimeRoot.js';
 import { LANGUAGE_EDITORS } from './languageEditors.js';
 const require = createRequire(import.meta.url);
@@ -1830,7 +1830,7 @@ async function debugCurrentFile() {
     if (!started)
         void vscode.window.showErrorMessage(`VS Code did not start debugging ${path.basename(configuration.program)}.`);
 }
-async function runCurrentFile(context, output, hanoiPanel) {
+async function runCurrentFile(context, output, hanoiPanel, selectedTarget) {
     const activeEditor = vscode.window.activeTextEditor;
     const document = activeEditor?.document;
     if (!document) {
@@ -1864,7 +1864,7 @@ async function runCurrentFile(context, output, hanoiPanel) {
     }
     output.clear();
     output.appendLine(`Program: ${document.fileName}`);
-    const target = await defaultPmachine(output);
+    const target = selectedTarget || await defaultPmachine(output);
     if (!target)
         return;
     output.appendLine(`Target: ${target.label}${target.description ? ` (${target.description})` : ''}`);
@@ -1961,19 +1961,36 @@ async function runCurrentFile(context, output, hanoiPanel) {
         void vscode.window.showErrorMessage(`PMachine run failed: ${detail}`);
     }
 }
+async function runActiveFileOnSwarmNode(item, output, hanoiPanel) {
+    const node = item?.node;
+    if (!node)
+        throw new Error('No Swarm PMachine was selected.');
+    const target = node.local
+        ? { key: 'js', label: node.name, description: 'Local runtime', runtime: 'js' }
+        : {
+            key: `esp32:${node.id}`,
+            label: node.name,
+            description: `${node.address} · ${node.runtime} PMachine`,
+            runtime: 'esp32',
+            nodeId: node.id,
+            host: node.address,
+        };
+    await runCurrentFile(undefined, output, hanoiPanel, target);
+}
 export function activate(context) {
     targetState = context.globalState;
     const output = vscode.window.createOutputChannel('Pulse PMachine');
     const hanoiPanel = new HanoiPanel();
     const services = new ServicesViewProvider(output);
     const servers = new ServicesViewProvider(output, 'servers');
+    const connections = new ConnectionsViewProvider(output, context.secrets);
     const swarm = new SwarmViewProvider(output);
     const swarmTree = vscode.window.createTreeView('pulseCatalogStudio.swarm', { treeDataProvider: swarm });
     const swarmRefresh = setInterval(() => { if (swarmTree.visible)
         swarm.refresh(); }, 15000);
     swarmRefresh.unref();
     const librarian = new DataLibrarianViewProvider(output);
-    const esp32Librarian = new Esp32LibrarianViewProvider(output);
+    librarian.refresh();
     const createAutoExpandingTreeView = (viewId, provider) => {
         const treeView = vscode.window.createTreeView(viewId, { treeDataProvider: provider });
         context.subscriptions.push(treeView, treeView.onDidChangeSelection(event => {
@@ -1987,14 +2004,16 @@ export function activate(context) {
         return treeView;
     };
     registerDataMapper(context, output);
-    context.subscriptions.push(output, hanoiPanel, services, servers, swarm, swarmTree, { dispose: () => clearInterval(swarmRefresh) }, swarmTree.onDidChangeVisibility(event => { if (event.visible)
-        swarm.refresh(); }), vscode.commands.registerCommand('pulse-pmachine.refreshSwarm', () => swarm.refresh()), librarian, esp32Librarian, createAutoExpandingTreeView('pulseCatalogStudio.sidebar', librarian), createAutoExpandingTreeView('pulseCatalogStudio.esp32Librarian', esp32Librarian), vscode.commands.registerCommand('pulse-pmachine.refreshEsp32Librarian', () => esp32Librarian.refresh()), vscode.commands.registerCommand('pulse-pmachine.openEsp32LibrarianSchema', (item) => openEsp32LibrarianSchema(item)), vscode.window.registerTreeDataProvider('pulse-pmachine.services', services), vscode.window.registerTreeDataProvider('pulse-pmachine.servers', servers), createAutoExpandingTreeView('pulse-pmachine.dataLibrarian', librarian), vscode.commands.registerCommand('pulse-pmachine.refreshLibrarian', () => librarian.refresh()), vscode.commands.registerCommand('pulse-pmachine.openLibrarianSchema', (item) => openLibrarianSchema(item, librarian)), vscode.commands.registerCommand('pulse-pmachine.showDataLibrarian', () => vscode.commands.executeCommand('pulse-pmachine.dataLibrarian.focus')), vscode.workspace.onDidGrantWorkspaceTrust(() => { librarian.refresh(); esp32Librarian.refresh(); }), vscode.commands.registerCommand('pulse-pmachine.refreshServices', () => services.refresh()), vscode.commands.registerCommand('pulse-pmachine.refreshServers', () => servers.refresh()), vscode.commands.registerCommand('pulse-pmachine.openServiceEndpoint', openServiceEndpoint), vscode.workspace.onDidChangeConfiguration(event => {
-        if (event.affectsConfiguration('pulse-pmachine.backendUrl')) {
+    context.subscriptions.push(output, hanoiPanel, services, servers, connections, swarm, swarmTree, { dispose: () => clearInterval(swarmRefresh) }, swarmTree.onDidChangeVisibility(event => { if (event.visible)
+        swarm.refresh(); }), vscode.commands.registerCommand('pulse-pmachine.refreshSwarm', () => swarm.refresh()), vscode.commands.registerCommand('pulse-pmachine.runActiveFileOnSwarmNode', (item) => runActiveFileOnSwarmNode(item, output, hanoiPanel).catch(error => { const detail = error instanceof Error ? error.message : String(error); output.appendLine(`Run failed: ${detail}`); output.show(true); void vscode.window.showErrorMessage(`PMachine run failed: ${detail}`); })), librarian, createAutoExpandingTreeView('pulseCatalogStudio.dataLibrarian', librarian), vscode.window.registerTreeDataProvider('pulse-pmachine.services', services), vscode.window.registerTreeDataProvider('pulse-pmachine.servers', servers), vscode.window.registerTreeDataProvider('pulseCatalogStudio.servers', servers), vscode.window.registerTreeDataProvider('pulse-pmachine.connections', connections), createAutoExpandingTreeView('pulse-pmachine.dataLibrarian', librarian), vscode.commands.registerCommand('pulse-pmachine.refreshLibrarian', () => librarian.refresh()), vscode.commands.registerCommand('pulse-pmachine.openLibrarianSchema', (item) => openLibrarianSchema(item, librarian)), vscode.commands.registerCommand('pulse-pmachine.showDataLibrarian', () => vscode.commands.executeCommand('pulse-pmachine.dataLibrarian.focus')), vscode.workspace.onDidGrantWorkspaceTrust(() => { librarian.refresh(); }), vscode.commands.registerCommand('pulse-pmachine.refreshServices', () => services.refresh()), vscode.commands.registerCommand('pulse-pmachine.refreshServers', () => servers.refresh()), vscode.commands.registerCommand('pulse-pmachine.refreshConnections', () => connections.refresh()), vscode.commands.registerCommand('pulse-pmachine.createConnectionString', (item) => createConnectionString(item).then(() => connections.refresh(), error => void vscode.window.showErrorMessage(`Pulse connection setup failed: ${error instanceof Error ? error.message : String(error)}`))), vscode.commands.registerCommand('pulse-pmachine.openConnectionEndpoint', openConnectionEndpoint), vscode.commands.registerCommand('pulse-pmachine.openServiceEndpoint', openServiceEndpoint), vscode.workspace.onDidChangeConfiguration(event => {
+        if (event.affectsConfiguration('pulse-pmachine.backendUrl') || event.affectsConfiguration('pulse-pmachine.connections')
+            || event.affectsConfiguration('pulse-pmachine.connectionServices')) {
             services.refresh();
             servers.refresh();
             swarm.refresh();
             librarian.refresh();
             esp32Librarian.refresh();
+            connections.refresh();
         }
     }), vscode.debug.registerDebugAdapterDescriptorFactory('pulse-pmachine', new PulseDebugFactory(context.extensionUri)), vscode.debug.registerDebugConfigurationProvider('pulse-pmachine', new PulseDebugConfigurationProvider()), vscode.debug.registerDebugConfigurationProvider('pulse-pmachine', new PulseDebugConfigurationProvider(), vscode.DebugConfigurationProviderTriggerKind.Dynamic), vscode.commands.registerCommand('pulse-pmachine.debugCurrentFile', () => debugCurrentFile()), vscode.commands.registerCommand('pulse-pmachine.selectDefaultNode', () => chooseDefaultPmachine(output)), vscode.commands.registerCommand('pulse-pmachine.resetDefaultNode', async () => {
         await targetState?.update(defaultTargetKey, undefined);

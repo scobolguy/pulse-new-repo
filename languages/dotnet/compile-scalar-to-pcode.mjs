@@ -166,7 +166,8 @@ export function compileScalarToPcode(program, source, {
         expression(node.value);
         const thrown = temporary();
         emit(`STORE_NAME ${thrown}`, token);
-        for (const finalizer of [...context.finallyStack].reverse()) statement(finalizer);
+        if (!context.exceptionDepth)
+          for (const finalizer of [...context.finallyStack].reverse()) statement(finalizer);
         emit(`LOAD_NAME ${thrown}`, token);
         emit('CALL_EXT system.exception.throw 1', token);
         break;
@@ -348,13 +349,41 @@ export function compileScalarToPcode(program, source, {
           if (item.value) { expression(item.value); emit(`STORE_NAME ${item.variable.slot}`, item.token); }
         }
         break;
+      case 'catch-parameter': break;
       case 'expressions': node.values.forEach(discard); break;
       case 'try':
+        {
+        const catchLabel = node.catches.length ? fresh('TRY_CATCH') : null;
+        const throwLabel = node.finallyBody && !node.catches.length ? fresh('TRY_FINALLY_THROW') : null;
+        const end = fresh('TRY_END');
+        emit(`TRY_BEGIN ${catchLabel || throwLabel}`, token);
         if (node.finallyBody) context.finallyStack.push(node.finallyBody);
+        context.exceptionDepth += 1;
         statement(node.body);
+        context.exceptionDepth -= 1;
         if (node.finallyBody) context.finallyStack.pop();
-        for (const handler of node.catches) statement(handler.body);
-        if (node.finallyBody) statement(node.finallyBody);
+        emit('TRY_END', token);
+        emit(`JMP ${end}`, token);
+        if (catchLabel) {
+          emit(`${catchLabel}:`, token);
+          const handler = node.catches[0];
+          emit(`STORE_NAME ${handler.parameter.variable.slot}`, handler.parameter.token);
+          if (node.finallyBody) context.finallyStack.push(node.finallyBody);
+          statement(handler.body);
+          if (node.finallyBody) statement(node.finallyBody);
+          if (node.finallyBody) context.finallyStack.pop();
+          emit(`JMP ${end}`, token);
+        }
+        if (throwLabel) {
+          emit(`${throwLabel}:`, token);
+          const thrown = temporary();
+          emit(`STORE_NAME ${thrown}`, token);
+          statement(node.finallyBody);
+          emit(`LOAD_NAME ${thrown}`, token);
+          emit('RETHROW', token);
+        }
+        emit(`${end}:`, token);
+        }
         break;
       case 'return':
         for (const finalizer of [...context.finallyStack].reverse()) statement(finalizer);
@@ -403,7 +432,7 @@ export function compileScalarToPcode(program, source, {
   emit('JMP MAIN', entry.token);
   // Validate all templates before instantiation; otherwise specialization could
   // accidentally make illegal generic operations (such as T + T) appear legal.
-  for (const method of methods.values()) if (!method.typeParams.length) instantiate(method, []);
+  for (const method of methods.values()) if (!method.typeParams.length && !method.globalsInit) instantiate(method, []);
   for (let index = 0; index < pending.length; index++) {
     const instance = pending[index], { method, bindings, label } = instance;
     const selfSlot = method.instance ? method.params[0]?.variable.slot : null;
@@ -419,7 +448,7 @@ export function compileScalarToPcode(program, source, {
         .map(variable => ({ ...variable, type: bindings.get(variable.type) || variable.type }))
     };
     procedures[label] = metadata;
-    context = { bindings, metadata, temporary: 0, loops: [], finallyStack: [], selfSlot };
+    context = { bindings, metadata, temporary: 0, loops: [], finallyStack: [], exceptionDepth: 0, selfSlot };
     emit(`${label}:`, method.token);
     if (method.constructorType && method.fields?.length) {
       emit(`PUSH_INT ${method.fields.length}`, method.token);
@@ -445,6 +474,13 @@ export function compileScalarToPcode(program, source, {
     emit('RET', method.token);
   }
   emit('MAIN:', entry.token);
+  // Module globals initialize in the root frame before the entry point, so
+  // every procedure reaches them through frame-chain name resolution.
+  const globalsInit = [...methods.values()].find(method => method.globalsInit);
+  if (globalsInit) {
+    context = { bindings: new Map(), metadata: { locals: [] }, temporary: 0, loops: [], finallyStack: [], exceptionDepth: 0, selfSlot: null };
+    statement(globalsInit.body);
+  }
   if (service?.dispatchEndpoints) {
     for (const endpoint of service.dispatchEndpoints) {
       const method = [...methods.values()].find(item => item.name === endpoint.handler);
@@ -481,8 +517,9 @@ export function compileScalarToPcode(program, source, {
     pcodeText: lines.join('\n') + '\n',
     programMap: {
       version: 1, sourceLanguage, runtimeUnit, entryLabel: 'MAIN',
-      globals: service?.dispatchEndpoints ? ['__service_response', '__service_discard']
-        : entry.returnType.name === 'int' ? ['CS_EXIT_CODE'] : [], procedures, entries: [], sourceMap,
+      globals: [...(globalsInit ? globalsInit.locals.map(local => local.slot) : []),
+        ...(service?.dispatchEndpoints ? ['__service_response', '__service_discard']
+          : entry.returnType.name === 'int' ? ['CS_EXIT_CODE'] : [])], procedures, entries: [], sourceMap,
       libraries: [{ id: SYSTEM_LIBRARY.id, version: SYSTEM_LIBRARY.version }],
       pmachineAbi: PMACHINE_ABI,
       target, targets: service ? ['js', 'esp32'] : [target], abi: { id: 'pulse.scalar', version: 1 },

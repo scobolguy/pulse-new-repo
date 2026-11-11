@@ -1,6 +1,37 @@
 import * as vscode from 'vscode';
 import { DataMapperBackend, structurePending } from './dataMapperBackend.js';
 import { fieldsOf } from './dataMapperModel.js';
+function directLibrarianUrl(baseUrl) {
+    const url = new URL(baseUrl);
+    if (url.hostname !== '127.0.0.1' && url.hostname !== 'localhost')
+        return undefined;
+    if (url.port !== '4000')
+        return undefined;
+    url.port = '4300';
+    return url.toString().replace(/\/+$/, '');
+}
+async function directSchemas(baseUrl) {
+    const directBase = directLibrarianUrl(baseUrl);
+    if (!directBase)
+        return undefined;
+    const response = await fetch(`${directBase}/api/librarian/schemas`, { signal: AbortSignal.timeout(60000) });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok)
+        throw new Error(`Direct Librarian request failed (HTTP ${response.status})`);
+    if (!Array.isArray(data.schemas))
+        throw new Error('Direct Librarian returned an invalid schemas list.');
+    return data.schemas;
+}
+async function directSchemaStructure(baseUrl, path) {
+    const directBase = directLibrarianUrl(baseUrl);
+    if (!directBase)
+        return undefined;
+    const response = await fetch(`${directBase}/api/librarian/schema-structure?path=${encodeURIComponent(path)}`, { signal: AbortSignal.timeout(60000) });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok)
+        throw new Error(`Direct Librarian structure request failed (HTTP ${response.status})`);
+    return { structure: data.structure ?? null, ...(typeof data.mtime === 'string' ? { mtime: data.mtime } : {}) };
+}
 export class LibrarianItem extends vscode.TreeItem {
     schema;
     fields;
@@ -29,10 +60,12 @@ export class DataLibrarianViewProvider {
     changes = new vscode.EventEmitter();
     onDidChangeTreeData = this.changes.event;
     loaded = new Map();
+    rootItems;
+    rootLoading = false;
     constructor(output) {
         this.output = output;
     }
-    refresh() { this.loaded.clear(); this.changes.fire(undefined); }
+    refresh() { this.loaded.clear(); this.rootItems = undefined; this.rootLoading = false; this.changes.fire(undefined); }
     dispose() { this.changes.dispose(); }
     getTreeItem(item) { return item; }
     async loadSchema(item) {
@@ -44,11 +77,44 @@ export class DataLibrarianViewProvider {
         if (cached)
             return cached;
         const base = item.baseUrl ?? vscode.workspace.getConfiguration('pulse-pmachine').get('backendUrl', 'http://127.0.0.1:4000');
-        const schema = await new DataMapperBackend(base).schemaWithStructure(item.schema);
+        let schema;
+        let directStructure;
+        try {
+            directStructure = await directSchemaStructure(base, item.schema.path);
+        }
+        catch {
+            directStructure = undefined;
+        }
+        if (directStructure) {
+            schema = { ...item.schema, structure: directStructure.structure, structureLoaded: true, ...(directStructure.mtime ? { mtime: directStructure.mtime } : {}) };
+        }
+        else {
+            schema = await new DataMapperBackend(base).schemaWithStructure(item.schema);
+        }
         this.loaded.set(schema.path, schema);
         return schema;
     }
     async getChildren(item) {
+        if (!item) {
+            if (this.rootItems)
+                return this.rootItems;
+            if (this.rootLoading)
+                return [new LibrarianItem('Loading Data Librarian...')];
+            this.rootLoading = true;
+            void this.loadChildren(undefined).then(items => {
+                this.rootItems = items;
+                this.rootLoading = false;
+                this.changes.fire(undefined);
+            }, error => {
+                this.rootItems = [new LibrarianItem(`Data Librarian unavailable - ${error instanceof Error ? error.message : String(error)}`)];
+                this.rootLoading = false;
+                this.changes.fire(undefined);
+            });
+            return [new LibrarianItem('Loading Data Librarian...')];
+        }
+        return this.loadChildren(item);
+    }
+    async loadChildren(item) {
         if (item) {
             if (!item.schema)
                 return [];
@@ -78,7 +144,19 @@ export class DataLibrarianViewProvider {
             return [new LibrarianItem('Trust this workspace to browse Librarian schemas')];
         try {
             const base = vscode.workspace.getConfiguration('pulse-pmachine').get('backendUrl', 'http://127.0.0.1:4000');
-            const schemas = await new DataMapperBackend(base).schemas();
+            let schemas;
+            try {
+                schemas = await directSchemas(base);
+            }
+            catch {
+                schemas = undefined;
+            }
+            if (schemas) {
+                this.output.appendLine('Data Librarian: using direct local service fallback on port 4300.');
+            }
+            else {
+                schemas = await new DataMapperBackend(base).schemas();
+            }
             return schemas.length
                 ? schemas.sort((left, right) => (left.name || left.path).localeCompare(right.name || right.path))
                     .map(schema => {

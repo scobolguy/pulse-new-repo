@@ -13,6 +13,7 @@ const run = (pcode, programMap = {}, runtimeContext = {}) => executeProgram({
 test('tagged reference ABI keeps null, kinds, and handles distinct', () => {
   validatePmachineAbi(PMACHINE_ABI);
   assert.throws(() => validatePmachineAbi({ ...PMACHINE_ABI, referenceAbiVersion: 2 }), /Unsupported reference ABI/);
+  assert.throws(() => validatePmachineAbi({ ...PMACHINE_ABI, exceptionAbiVersion: 2 }), /Unsupported exception ABI/);
   assert.equal(REFERENCE_ABI.nullHandle, 0);
   assert.deepEqual(REFERENCE_ABI.kinds, ['object', 'array', 'callable']);
   assert.equal(validateReferenceKind('object'), 'object');

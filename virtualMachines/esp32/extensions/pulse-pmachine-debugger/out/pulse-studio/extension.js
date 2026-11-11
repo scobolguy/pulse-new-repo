@@ -2537,7 +2537,6 @@ function activate(context, vscodeApi) {
   const deployProvider = new WflDeployViewProvider()
   const inventoryProvider = new NodeInventoryTreeProvider()
   const diagnostics = vscode.languages.createDiagnosticCollection('pulse-vfl')
-  const infrastructureProvider = new PulseInfrastructureTreeProvider()
   context.subscriptions.push(
     diagnostics,
     provider,
@@ -2546,7 +2545,6 @@ function activate(context, vscodeApi) {
     inventoryProvider,
     vscode.window.registerTreeDataProvider(SIDEBAR_VIEW_TYPE, provider),
     vscode.window.registerTreeDataProvider(MAPPER_VIEW_TYPE, mapperProvider),
-    vscode.window.registerTreeDataProvider('pulseCatalogStudio.infrastructure', infrastructureProvider),
     vscode.window.registerTreeDataProvider('pulseCatalogStudio.deploy', deployProvider),
     vscode.window.registerTreeDataProvider('pulseCatalogStudio.nodeInventory', inventoryProvider),
     vscode.commands.registerCommand(
@@ -2590,7 +2588,6 @@ function activate(context, vscodeApi) {
     }),
     vscode.commands.registerCommand('pulseCatalogStudio.refreshDataLibrarian', () => provider.refresh()),
     vscode.commands.registerCommand('pulseCatalogStudio.refreshDataMapper', () => mapperProvider.refresh()),
-    vscode.commands.registerCommand('pulseCatalogStudio.refreshInfrastructure', () => infrastructureProvider.refresh()),
     vscode.commands.registerCommand('pulseCatalogStudio.refreshDeployView', () => deployProvider.refresh()),
     vscode.commands.registerCommand('pulseCatalogStudio.refreshNodeInventory', () => inventoryProvider.refresh()),
     vscode.commands.registerCommand('pulseCatalogStudio.validateWflDeployment', validateWflDeployment),

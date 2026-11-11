@@ -197,6 +197,9 @@ enum Opcode : uint8_t {
     OP_DEC_EDIT = 0x88,          // COBOL edited formatting
     OP_DEC_FITS = 0x89,          // Test decimal digit width
     OP_PUSH_REF = 0x8A,          // Reference a live variable or a character slice
+    OP_TRY_BEGIN = 0x8B,         // Push an exception frame targeting a label
+    OP_TRY_END = 0x8C,           // Pop the current exception frame
+    OP_RETHROW = 0x8D,           // Throw the scalar value on top of the stack
     OP_HALT = 0xFF      // HALT
 };
 
@@ -263,6 +266,9 @@ struct ExtendableStorageDiagnostics {
         if (mnemonic == "DEC_EDIT") return OP_DEC_EDIT;
         if (mnemonic == "DEC_FITS") return OP_DEC_FITS;
         if (mnemonic == "PUSH_REF") return OP_PUSH_REF;
+        if (mnemonic == "TRY_BEGIN") return OP_TRY_BEGIN;
+        if (mnemonic == "TRY_END") return OP_TRY_END;
+        if (mnemonic == "RETHROW") return OP_RETHROW;
         if (mnemonic == "RDIV") return OP_RDIV;
         if (mnemonic == "ORD") return OP_ORD;
         if (mnemonic == "STRLEN") return OP_STRLEN;
