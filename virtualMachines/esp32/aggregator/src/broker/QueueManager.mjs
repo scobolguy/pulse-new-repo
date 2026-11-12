@@ -3,7 +3,7 @@ import { QueueManagerPersistence } from './QueueManagerPersistence.mjs';
 import { randomUUID } from 'crypto';
 
 export default class QueueManager {
-  constructor(name = 'default', persistPath = null) {
+  constructor(name = 'default', persistPath = null, { audit = false } = {}) {
     this.name = name;
     this.queues = {}; // {queueName: {messages: [], config: {...}}}
     this.queueConfig = {}; // Separate track of queue configurations
@@ -13,6 +13,9 @@ export default class QueueManager {
     this.configVersion = 0; // Version of config for sync detection
     this.peerNotifyCallbacks = []; // Callbacks to notify peer instances on config change
     this.persistence = persistPath ? new QueueManagerPersistence(name, persistPath) : null;
+    if (typeof audit !== 'boolean' && typeof audit !== 'function')
+      throw new Error('Broker audit must be disabled or a callback');
+    this.audit = audit;
     this.seenMessageIds = new Set(); // Deduplication for replicated enqueues
     this.snapshotEveryOps = 200;
     this.retainOpsAfterSnapshot = 500;
@@ -662,11 +665,13 @@ export default class QueueManager {
   // Log an operation for replication
 
   logOperation(operation) {
-    this.operationLog.push({
+    const entry = {
       version: ++this.operationLogVersion,
       timestamp: Date.now(),
       ...operation
-    });
+    };
+    this.operationLog.push(entry);
+    if (typeof this.audit === 'function') this.audit({ ...entry, category: 'message-broker' });
     // Persist to disk
     if (this.persistence) {
       this.persistence.appendOperation(this.operationLog[this.operationLog.length - 1]);

@@ -11,12 +11,16 @@ export const HOSTED_IMAGE_OPCODES = Object.freeze({
   LE: 0x1f, GT: 0x20, GE: 0x21, CALL_EXT: 0x29,
   PRINT: 0x22, PRINT_NL: 0x23, PUSH_REAL: 0x57,
   OR: 0x4b, AND: 0x4c, NOT: 0x4d, STREQ: 0x4e, STRNEQ: 0x4f,
-  MAP_RETURN: 0x50, CONCAT: 0x56, HALT: 0xff
+  MAP_RETURN: 0x50, CONCAT: 0x56, TRY_BEGIN: 0x8b, TRY_END: 0x8c,
+  RETHROW: 0x8d, HALT: 0xff
 });
 
 const OBJECT_BINDINGS = Object.freeze({
   'object.new': 1, 'object.get': 2, 'object.set': 3,
   'object.length': 1, 'object.resize': 2
+});
+const SYSTEM_BINDINGS = Object.freeze({
+  'system.int32.tostring': 1
 });
 
 export const HOSTED_IMAGE_PROFILES = Object.freeze({
@@ -37,7 +41,7 @@ export function encodeHostedImage(pcodeText, { profile = 'bounded' } = {}) {
     const opcode = HOSTED_IMAGE_OPCODES[mnemonic];
     if (opcode === undefined) throw new Error(`Unsupported hosted image opcode: ${mnemonic}`);
     let value = 0, argc = 0, text = '';
-    if (['JMP', 'JZ', 'CALL'].includes(mnemonic)) {
+    if (['JMP', 'JZ', 'CALL', 'TRY_BEGIN'].includes(mnemonic)) {
       if (targetIndex < 0 || targetIndex >= instructions.length) throw new Error('Invalid hosted image branch target');
       value = targetIndex;
     }
@@ -51,7 +55,7 @@ export function encodeHostedImage(pcodeText, { profile = 'bounded' } = {}) {
       text = operand.label;
       if (!Number.isInteger(argc) || argc < 0 || argc > 8) throw new Error('Invalid hosted image arity');
       if (mnemonic === 'CALL_EXT') {
-        if ((OBJECT_BINDINGS[text] ?? SERVICE_HOST_BINDINGS[text]?.arity) !== argc)
+        if ((OBJECT_BINDINGS[text] ?? SYSTEM_BINDINGS[text] ?? SERVICE_HOST_BINDINGS[text]?.arity) !== argc)
           throw new Error('Invalid hosted image binding');
         if (SERVICE_HOST_BINDINGS[text]?.capability || SERVICE_HOST_BINDINGS[text]?.desktopOnly || text === 'host.capabilities') {
           throw new Error(`Desktop-only hosted image binding: ${text}`);

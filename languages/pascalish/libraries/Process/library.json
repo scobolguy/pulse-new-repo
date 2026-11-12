@@ -1,0 +1,16 @@
+{
+  "id": "Process",
+  "version": "1.0.0",
+  "description": "Process checkpoint and transaction recovery facade.",
+  "source": "Process.pas",
+  "provides": {
+    "types": [],
+    "functions": [
+      "checkpointProcess",
+      "restoreCheckpoint",
+      "beginTransaction",
+      "commitTransaction",
+      "abortTransaction"
+    ]
+  }
+}

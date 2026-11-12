@@ -61,6 +61,7 @@ export async function createPascalishServiceHost({
   maxTimers = 8, maxDaemonDatagramBytes = 1024, clock = () => Math.floor(performance.now()), logger = console,
   onDaemonEvent = null, storageRoots = {}, maxFileBytes = 262144, desktopBudget = false,
   distributedBindings = {}, bluetoothSourceFactory = null, filesystemBindingOverrides = {},
+  processBindings = {},
   lifecycle = undefined, infrastructureProbe = null, inventoryGrant = null, scheduler = null
 }) {
   if (scheduler !== null && !(scheduler instanceof PMachineScheduler)) throw failure('Invalid pmachine scheduler');
@@ -73,6 +74,16 @@ export async function createPascalishServiceHost({
         !['host.fs_read_text', 'host.fs_read_text_auto', 'host.fs_write_text', 'host.fs_exists',
           'host.fs_resolve_relative'].includes(name) || typeof handler !== 'function')) {
     throw failure('Invalid filesystem binding overrides');
+  }
+  if (!processBindings || typeof processBindings !== 'object' || Array.isArray(processBindings) ||
+      Object.entries(processBindings).some(([name, handler]) =>
+        !['host.checkpoint_process', 'host.restore_checkpoint', 'host.begin_transaction',
+          'host.commit_transaction', 'host.abort_transaction', 'host.pmachine_network_ready',
+          'host.pmachine_install_bundle', 'host.pmachine_start', 'host.pmachine_stop',
+          'host.pmachine_status', 'host.pmachine_checkpoint', 'host.pmachine_restore',
+          'host.pmachine_boot_fixed'].includes(name)
+        || typeof handler !== 'function')) {
+    throw failure('Invalid process binding overrides');
   }
   text(collectorId, 'collectorId');
   if (infrastructureProbe !== null && typeof infrastructureProbe !== 'function') {
@@ -116,6 +127,12 @@ export async function createPascalishServiceHost({
   const filesystem = await createFilesystemBindings(storageRoots, {
     maxFileBytes: Math.min(maxFileBytes, maxResponseBytes), maxPageBytes: maxResponseBytes
   });
+  const pmachineBindingNames = [
+    'host.pmachine_network_ready', 'host.pmachine_install_bundle', 'host.pmachine_start',
+    'host.pmachine_stop', 'host.pmachine_status', 'host.pmachine_checkpoint',
+    'host.pmachine_restore', 'host.pmachine_boot_fixed'
+  ];
+  const hasPmachineControl = pmachineBindingNames.every(name => typeof processBindings[name] === 'function');
   const cobolLibrary = createCobolHostLibrary({ ...filesystem.handlers, ...filesystemBindingOverrides });
   const inventoryApply = inventoryGrant === null ? null : createInventoryClient(inventoryGrant);
   const capabilities = {
@@ -130,6 +147,7 @@ export async function createPascalishServiceHost({
       ...(inventoryApply ? ['inventory.transaction'] : []),
       ...(bluetoothSourceFactory ? ['bluetooth.discovery'] : []),
       ...(infrastructureProbe ? ['infrastructure.readiness'] : []),
+      ...(hasPmachineControl ? ['pmachine.control'] : []),
       ...(networkPeers.length ? ['filesystem.remote'] : [])],
     limits: { maxBodyBytes, maxResponseBytes, maxSteps, maxExecutionMs, ...filesystem.limits }
   };
@@ -137,7 +155,7 @@ export async function createPascalishServiceHost({
   const mappingsById = parseProgramMapMappings(compiled.programMap);
   const opcodeMap = await loadOpcodeMap();
   const units = new Map();
-  if (daemons.length > 3) throw failure('Hosted daemon count must be 0..3');
+  if (daemons.length > 16) throw failure('Hosted daemon count must be 0..16');
   const ownedPorts = new Set(udpPort === null || udpPort === 0 ? [] : [udpPort]);
   // A daemon entry is a compiled daemon, or { compiled, udpPort } when the daemon owns a UDP intake.
   for (const entry of daemons) {
@@ -384,6 +402,7 @@ export async function createPascalishServiceHost({
         ...filesystem.handlers,
         ...cobolLibrary.handlers,
         ...filesystemBindingOverrides,
+        ...processBindings,
         ...createJsonCollectionBindings(),
         ...createJsonValueBindings(),
         ...createXmlBindings({ maxBytes: maxBodyBytes }),

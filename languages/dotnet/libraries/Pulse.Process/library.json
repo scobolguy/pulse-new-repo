@@ -1,0 +1,19 @@
+{
+  "id": "Pulse.Process",
+  "version": "1.0.0",
+  "description": "Portable process checkpoint and transaction recovery calls.",
+  "functions": [
+    { "name": "Pulse.Process.CheckpointProcess", "parameters": ["string", "string", "string"], "returns": "string" },
+    { "name": "Pulse.Process.RestoreCheckpoint", "parameters": ["string", "string"], "returns": "string" },
+    { "name": "Pulse.Process.BeginTransaction", "parameters": ["string", "string"], "returns": "string" },
+    { "name": "Pulse.Process.CommitTransaction", "parameters": ["string"], "returns": "string" },
+    { "name": "Pulse.Process.AbortTransaction", "parameters": ["string"], "returns": "string" }
+  ],
+  "bindings": {
+    "Pulse.Process.CheckpointProcess": "host.checkpoint_process",
+    "Pulse.Process.RestoreCheckpoint": "host.restore_checkpoint",
+    "Pulse.Process.BeginTransaction": "host.begin_transaction",
+    "Pulse.Process.CommitTransaction": "host.commit_transaction",
+    "Pulse.Process.AbortTransaction": "host.abort_transaction"
+  }
+}

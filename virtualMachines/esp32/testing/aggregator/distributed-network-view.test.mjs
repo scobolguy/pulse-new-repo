@@ -365,6 +365,25 @@ test('infrastructure keeps Network and adds cache sibling with names and IPs reg
   assert.equal(children[0].description, '192.168.2.28')
 })
 
+test('Network branch includes cached devices alongside discovered nodes', async () => {
+  const view = await loadView(url => new URL(url).pathname === '/api/nodes'
+    ? { nodes: [{ nodeName: 'ESP32', ip: '192.168.2.83' }] }
+    : page([device('Bedroom')]))
+  const provider = new view.PulseInfrastructureTreeProvider()
+  const children = await provider.getChildren({ kind: 'network-category' })
+  assert.deepEqual(Array.from(children, item => item.label), ['ESP32', 'Bedroom'])
+  assert.equal(children[1].description, '192.168.2.28')
+})
+
+test('Network branch reports cache errors without hiding available nodes', async () => {
+  const view = await loadView(url => {
+    if (new URL(url).pathname === '/api/nodes') return { nodes: [{ nodeName: 'ESP32', ip: '192.168.2.83' }] }
+    throw new Error('Cache unavailable')
+  })
+  const children = await new view.PulseInfrastructureTreeProvider().getChildren({ kind: 'network-category' })
+  assert.deepEqual(Array.from(children, item => item.label), ['ESP32', 'Distributed cache not reachable'])
+})
+
 test('cache errors and empty state are visible instead of a discovery fallback', async () => {
   const empty = await loadView(page([]))
   assert.equal((await empty.getDistributedNetworkItems())[0].label, 'No cached network devices')

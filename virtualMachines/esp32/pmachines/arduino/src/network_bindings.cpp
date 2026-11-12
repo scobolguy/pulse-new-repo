@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <WiFiUdp.h>
+#include <algorithm>
 #include <mbedtls/aes.h>
 #include <mbedtls/gcm.h>
 
@@ -51,6 +52,16 @@ std::string encode(const uint8_t* bytes, size_t length) {
 std::string encode(const std::string& bytes) {
     return encode(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size());
 }
+IPAddress networkAddress(const IPAddress& address, const IPAddress& mask) {
+    return IPAddress(address[0] & mask[0], address[1] & mask[1],
+        address[2] & mask[2], address[3] & mask[3]);
+}
+bool connected(IPAddress& address, IPAddress& mask) {
+    address = WiFi.localIP();
+    mask = WiFi.subnetMask();
+    return WiFi.status() == WL_CONNECTED && address != IPAddress(0, 0, 0, 0)
+        && mask != IPAddress(0, 0, 0, 0);
+}
 }
 
 std::string NetworkBindings::eventBytes(const std::string& body) {
@@ -77,7 +88,7 @@ void NetworkBindings::diagnostics(JsonObject out, const Session& session) const 
 bool NetworkBindings::configure(JsonVariantConst peers, Session& session, std::string& error) {
     std::vector<std::pair<std::string, uint16_t>> next;
     if (!peers.isNull()) {
-        if (!peers.is<JsonArrayConst>() || peers.size() > 8) {
+        if (!peers.is<JsonArrayConst>() || peers.size() > 256) {
             error = "Invalid network peer allowlist"; return false;
         }
         for (JsonVariantConst peer : peers.as<JsonArrayConst>()) {
@@ -103,6 +114,228 @@ bool NetworkBindings::invoke(const std::string& op, const std::vector<HostValue>
     const auto& allowed = current->allowed;
     auto fail = [&](const char* message) { error = message; return false; };
     auto byte = [](int value) { return value >= 0 && value <= 255; };
+    if (op == "network_discovery_step") {
+        JsonDocument document;
+        JsonArray devices = document["devices"].to<JsonArray>();
+        const uint32_t now = millis();
+        if (discovery.cooldownUntil != 0 &&
+            static_cast<int32_t>(now - discovery.cooldownUntil) < 0) {
+            document["state"] = "cooldown";
+            document["remainingMs"] = discovery.cooldownUntil - now;
+            serializeJson(document, result.text);
+            return true;
+        }
+        IPAddress address, mask;
+        if (!connected(address, mask)) return fail("Wi-Fi is not connected");
+        if (!discovery.initialized || discovery.cooldownUntil != 0) {
+            const uint32_t network = static_cast<uint32_t>(networkAddress(address, mask));
+            discovery.first = network;
+            discovery.last = network | ~static_cast<uint32_t>(mask);
+            if (discovery.last - discovery.first > 1024) {
+                discovery.first = static_cast<uint32_t>(address) & 0xffffff00U;
+                discovery.last = discovery.first | 0xffU;
+            }
+            discovery.cursor = discovery.first + 1;
+            discovery.cooldownUntil = 0;
+            discovery.initialized = true;
+            discovery.multicastProbed = false;
+        }
+        const uint32_t batchEnd = std::min(discovery.cursor + 10, discovery.last);
+        WiFiUDP udp;
+        for (uint32_t value = discovery.cursor; value < batchEnd; ++value) {
+            IPAddress peer(value);
+            for (const uint16_t port : { static_cast<uint16_t>(554), static_cast<uint16_t>(2020) }) {
+                WiFiClient client;
+                client.setTimeout(50);
+                if (!client.connect(peer, port, 50)) continue;
+                client.printf("OPTIONS rtsp://%s:%u/ RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: PulseDiscovery\r\n\r\n",
+                    peer.toString().c_str(), port);
+                const uint32_t responseDeadline = millis() + 75;
+                String response;
+                while (millis() < responseDeadline && !client.available()) delay(1);
+                while (client.available() && response.length() < 32)
+                    response += static_cast<char>(client.read());
+                client.stop();
+                if (response.startsWith("RTSP/1.0") || response.startsWith("RTSP/1.1")) {
+                    JsonObject device = devices.add<JsonObject>();
+                    device["kind"] = "device";
+                    device["protocol"] = "camera";
+                    device["address"] = peer.toString();
+                    device["port"] = port;
+                    device["deviceType"] = "camera";
+                    device["icon"] = "camera";
+                }
+            }
+        }
+        if (!discovery.multicastProbed) {
+            static const char probe[] =
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+                "<e:Envelope xmlns:e=\"http://www.w3.org/2003/05/soap-envelope\" "
+                "xmlns:w=\"http://schemas.xmlsoap.org/ws/2004/08/addressing\" "
+                "xmlns:d=\"http://schemas.xmlsoap.org/ws/2005/04/discovery\" "
+                "xmlns:dn=\"http://www.onvif.org/ver10/network/wsdl\">"
+                "<e:Header><w:MessageID>uuid:pulse-discovery</w:MessageID>"
+                "<w:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</w:To>"
+                "<w:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</w:Action></e:Header>"
+                "<e:Body><d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe></e:Body></e:Envelope>";
+            IPAddress group(239, 255, 255, 250);
+            if (udp.beginMulticast(group, 3702)) {
+                udp.beginPacket(group, 3702);
+                udp.write(reinterpret_cast<const uint8_t*>(probe), sizeof(probe) - 1);
+                udp.endPacket();
+                const uint32_t deadline = millis() + 250;
+                while (millis() < deadline) {
+                    if (udp.parsePacket() <= 0) { delay(1); continue; }
+                    JsonObject device = devices.add<JsonObject>();
+                    device["kind"] = "device";
+                    device["protocol"] = "camera";
+                    device["address"] = udp.remoteIP().toString();
+                    device["port"] = 3702;
+                    device["deviceType"] = "camera";
+                    device["icon"] = "camera";
+                }
+                udp.stop();
+            }
+            discovery.multicastProbed = true;
+        }
+        discovery.cursor = batchEnd;
+        if (discovery.cursor >= discovery.last) {
+            discovery.cooldownUntil = millis() + 300000;
+            document["state"] = "cooldown";
+            document["remainingMs"] = 300000;
+        } else {
+            document["state"] = "scanning";
+            document["nextAddress"] = discovery.cursor;
+        }
+        serializeJson(document, result.text);
+        return true;
+    }
+    if (op == "camera_discover") {
+        JsonDocument document;
+        JsonArray devices = document.to<JsonArray>();
+        IPAddress address, mask;
+        if (!connected(address, mask)) {
+            serializeJson(devices, result.text);
+            return true;
+        }
+        static const char probe[] =
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            "<e:Envelope xmlns:e=\"http://www.w3.org/2003/05/soap-envelope\" "
+            "xmlns:w=\"http://schemas.xmlsoap.org/ws/2004/08/addressing\" "
+            "xmlns:d=\"http://schemas.xmlsoap.org/ws/2005/04/discovery\" "
+            "xmlns:dn=\"http://www.onvif.org/ver10/network/wsdl\">"
+            "<e:Header><w:MessageID>uuid:pulse-discovery</w:MessageID>"
+            "<w:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</w:To>"
+            "<w:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</w:Action></e:Header>"
+            "<e:Body><d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types>"
+            "</d:Probe></e:Body></e:Envelope>";
+        IPAddress group(239, 255, 255, 250);
+        WiFiUDP udp;
+        if (!udp.beginMulticast(group, 3702)) return fail("Unable to join ONVIF multicast group");
+        udp.beginPacket(group, 3702);
+        udp.write(reinterpret_cast<const uint8_t*>(probe), sizeof(probe) - 1);
+        udp.endPacket();
+        const uint32_t deadline = millis() + 2000;
+        uint8_t buffer[256];
+        while (millis() < deadline) {
+            const int size = udp.parsePacket();
+            if (size <= 0) {
+                delay(1);
+                continue;
+            }
+            udp.read(buffer, std::min(size, static_cast<int>(sizeof(buffer) - 1)));
+            JsonObject device = devices.add<JsonObject>();
+            device["kind"] = "camera";
+            device["protocol"] = "onvif";
+            device["address"] = udp.remoteIP().toString();
+            device["port"] = udp.remotePort();
+        }
+        udp.stop();
+        uint32_t first = static_cast<uint32_t>(networkAddress(address, mask));
+        uint32_t last = first | ~static_cast<uint32_t>(mask);
+        if (last - first > 1024) {
+            first = static_cast<uint32_t>(address) & 0xffffff00U;
+            last = first | 0xffU;
+        }
+        for (uint32_t value = first + 1; value < last; value += 10) {
+            const uint32_t batchEnd = std::min(value + 10, last);
+            for (const uint16_t port : { static_cast<uint16_t>(554), static_cast<uint16_t>(2020) }) {
+                WiFiClient clients[10];
+                IPAddress peers[10];
+                bool connected[10] = {};
+                const size_t count = batchEnd - value;
+                for (size_t index = 0; index < count; ++index) {
+                    peers[index] = IPAddress(value + index);
+                    clients[index].setTimeout(250);
+                    connected[index] = clients[index].connect(peers[index], port, 50);
+                    if (connected[index]) {
+                        clients[index].printf(
+                            "OPTIONS rtsp://%s:%u/ RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: PulseDiscovery\r\n\r\n",
+                            peers[index].toString().c_str(), port);
+                    }
+                }
+                const uint32_t responseDeadline = millis() + 250;
+                String responses[10];
+                while (millis() < responseDeadline) {
+                    bool pending = false;
+                    for (size_t index = 0; index < count; ++index) {
+                        if (!connected[index]) continue;
+                        pending = true;
+                        while (clients[index].available() && responses[index].length() < 128)
+                            responses[index] += static_cast<char>(clients[index].read());
+                        if (responses[index].length() >= 9) clients[index].stop();
+                    }
+                    if (!pending) break;
+                    delay(1);
+                }
+                for (size_t index = 0; index < count; ++index) {
+                    clients[index].stop();
+                    if (responses[index].startsWith("RTSP/1.0") || responses[index].startsWith("RTSP/1.1")) {
+                        JsonObject device = devices.add<JsonObject>();
+                        device["kind"] = "camera";
+                        device["protocol"] = "rtsp";
+                        device["address"] = peers[index].toString();
+                        device["port"] = port;
+                    }
+                }
+            }
+        }
+        serializeJson(devices, result.text);
+        return true;
+    }
+    if (op == "local_ipv4_subnets") {
+        JsonDocument document;
+        JsonArray subnets = document.to<JsonArray>();
+        const IPAddress address = WiFi.localIP();
+        const IPAddress netmask = WiFi.subnetMask();
+        if (WiFi.status() != WL_CONNECTED || address == IPAddress(0, 0, 0, 0)
+            || netmask == IPAddress(0, 0, 0, 0))
+            return serializeJson(subnets, result.text), true;
+
+        JsonObject subnet = subnets.add<JsonObject>();
+        subnet["interface"] = "wifi";
+        subnet["address"] = address.toString();
+        subnet["netmask"] = netmask.toString();
+        int prefixLength = 0;
+        for (int octet = 0; octet < 4; ++octet) {
+            uint8_t value = netmask[octet];
+            while (value) {
+                prefixLength += value & 0x80 ? 1 : 0;
+                value <<= 1;
+            }
+        }
+        subnet["prefixLength"] = prefixLength;
+        subnet["network"] = IPAddress(
+            address[0] & netmask[0], address[1] & netmask[1],
+            address[2] & netmask[2], address[3] & netmask[3]).toString();
+        subnet["broadcast"] = IPAddress(
+            (address[0] & netmask[0]) | static_cast<uint8_t>(~netmask[0]),
+            (address[1] & netmask[1]) | static_cast<uint8_t>(~netmask[1]),
+            (address[2] & netmask[2]) | static_cast<uint8_t>(~netmask[2]),
+            (address[3] & netmask[3]) | static_cast<uint8_t>(~netmask[3])).toString();
+        serializeJson(subnets, result.text);
+        return true;
+    }
     if (op.rfind("buffer_", 0) == 0) {
         if (op == "buffer_create")
             return buffer.create(args[0].integer, result.integer, error);

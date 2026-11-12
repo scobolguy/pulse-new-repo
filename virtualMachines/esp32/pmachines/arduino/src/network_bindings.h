@@ -39,6 +39,11 @@ private:
     std::array<uint8_t, 4100> scratch{};
     ByteBuffer buffer;
     Session* current = nullptr;
+    struct DiscoveryScan {
+        bool initialized = false;
+        uint32_t first = 0, last = 0, cursor = 0, cooldownUntil = 0;
+        bool multicastProbed = false;
+    } discovery;
 };
 }
 #endif

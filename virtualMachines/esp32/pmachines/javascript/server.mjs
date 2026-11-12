@@ -285,9 +285,9 @@ export function createJsPmachineNodeServer({
     if (sharedDaemons && daemonFile) throw Object.assign(new Error('Use daemons or legacy daemonFile, not both'), { status: 400 });
     if (sharedDaemons) {
       const json = params.get('daemons');
-      const entries = json.length <= 1024 ? JSON.parse(json) : null;
-      if (!Array.isArray(entries) || entries.length < 1 || entries.length > 3) {
-        throw Object.assign(new Error('Invalid daemons list (1..3 entries)'), { status: 400 });
+      const entries = json.length <= 8192 ? JSON.parse(json) : null;
+      if (!Array.isArray(entries) || entries.length < 1 || entries.length > 16) {
+        throw Object.assign(new Error('Invalid daemons list (1..16 entries)'), { status: 400 });
       }
       for (const entry of entries) {
         if (typeof entry?.file !== 'string' || typeof entry?.map !== 'string') {

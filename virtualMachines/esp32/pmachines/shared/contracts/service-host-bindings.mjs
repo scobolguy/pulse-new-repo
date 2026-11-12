@@ -225,6 +225,35 @@ export const SERVICE_HOST_BINDINGS = Object.freeze({
   'host.tcp_exchange': { arity: 6, args: ['string', 'integer', 'string', 'integer', 'integer', 'integer'], result: 'string' },
   'host.tcp_exchange_buffer': { arity: 6, args: ['string', 'integer', 'string', 'integer', 'integer', 'integer'], result: 'integer' },
   'host.udp_exchange': { arity: 5, args: ['string', 'integer', 'string', 'integer', 'integer'], result: 'string' },
+  'host.local_ipv4_subnets': { arity: 0, args: [], result: 'string' },
+  'host.kasa_discover': { arity: 0, args: [], result: 'string' },
+  'host.camera_discover': { arity: 0, args: [], result: 'string' },
+  'host.network_discovery_step': { arity: 0, args: [], result: 'string' },
+  'host.checkpoint_process': { arity: 3, args: ['string', 'string', 'string'], result: 'string' },
+  'host.restore_checkpoint': { arity: 2, args: ['string', 'string'], result: 'string' },
+  'host.begin_transaction': { arity: 2, args: ['string', 'string'], result: 'string' },
+  'host.commit_transaction': { arity: 1, args: ['string'], result: 'string' },
+  'host.abort_transaction': { arity: 1, args: ['string'], result: 'string' },
+  'host.pmachine_network_ready': { arity: 0, args: [], result: 'string', capability: 'pmachine.control' },
+  'host.pmachine_install_bundle': {
+    arity: 2, args: ['string', 'string'], result: 'string', capability: 'pmachine.control'
+  },
+  'host.pmachine_start': {
+    arity: 2, args: ['string', 'string'], result: 'string', capability: 'pmachine.control'
+  },
+  'host.pmachine_stop': {
+    arity: 1, args: ['string'], result: 'string', capability: 'pmachine.control'
+  },
+  'host.pmachine_status': { arity: 0, args: [], result: 'string', capability: 'pmachine.control' },
+  'host.pmachine_checkpoint': {
+    arity: 3, args: ['string', 'string', 'string'], result: 'string', capability: 'pmachine.control'
+  },
+  'host.pmachine_restore': {
+    arity: 2, args: ['string', 'string'], result: 'string', capability: 'pmachine.control'
+  },
+  'host.pmachine_boot_fixed': {
+    arity: 1, args: ['string'], result: 'string', capability: 'pmachine.control'
+  },
   'host.filesystem_post': {
     arity: 5, args: ['string', 'integer', 'string', 'string', 'integer'],
     result: 'string', capability: 'filesystem.remote'

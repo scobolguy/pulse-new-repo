@@ -13,7 +13,24 @@ const hostFunctions = [
   ['http', 'requestQuery', 'event_query', ['string'], 'string'],
   ['http', 'requestHeader', 'event_header', ['string'], 'string'],
   ['net', 'tcpExchange', 'tcp_exchange', ['string', 'int', 'string', 'int', 'int', 'int'], 'string'],
-  ['net', 'udpExchange', 'udp_exchange', ['string', 'int', 'string', 'int', 'int'], 'string']
+  ['net', 'udpExchange', 'udp_exchange', ['string', 'int', 'string', 'int', 'int'], 'string'],
+  ['net', 'localIpv4Subnets', 'local_ipv4_subnets', [], 'string']
+  ,['net', 'kasaDiscover', 'kasa_discover', [], 'string']
+  ,['net', 'cameraDiscover', 'camera_discover', [], 'string']
+  ,['net', 'networkDiscoveryStep', 'network_discovery_step', [], 'string']
+  ,['process', 'checkpointProcess', 'checkpoint_process', ['string', 'string', 'string'], 'string']
+  ,['process', 'restoreCheckpoint', 'restore_checkpoint', ['string', 'string'], 'string']
+  ,['process', 'beginTransaction', 'begin_transaction', ['string', 'string'], 'string']
+  ,['process', 'commitTransaction', 'commit_transaction', ['string'], 'string']
+  ,['process', 'abortTransaction', 'abort_transaction', ['string'], 'string']
+  ,['pmachine', 'networkReady', 'pmachine_network_ready', [], 'string']
+  ,['pmachine', 'installBundle', 'pmachine_install_bundle', ['string', 'string'], 'string']
+  ,['pmachine', 'start', 'pmachine_start', ['string', 'string'], 'string']
+  ,['pmachine', 'stop', 'pmachine_stop', ['string'], 'string']
+  ,['pmachine', 'status', 'pmachine_status', [], 'string']
+  ,['pmachine', 'checkpoint', 'pmachine_checkpoint', ['string', 'string', 'string'], 'string']
+  ,['pmachine', 'restore', 'pmachine_restore', ['string', 'string'], 'string']
+  ,['pmachine', 'bootFixed', 'pmachine_boot_fixed', ['string'], 'string']
 ].map(([module, name, binding, parameterTypes, returnType]) => ({
   module, name, key: `Program.${name}`, label: `host.${binding}`, parameterTypes, returnType
 }));
@@ -24,7 +41,13 @@ const standardLibraryFunctions = [
     parameterTypes: [], returnType: 'void' }
 ];
 
-export function compileKotlinToPcode(source, { fileName = 'program.kt', target = 'js', serviceId } = {}) {
+export function compileKotlinToPcode(source, {
+  fileName = 'program.kt', target = 'js', serviceId, daemonId, daemonRefreshMs = 1000
+} = {}) {
+  if (serviceId !== undefined && daemonId !== undefined)
+    throw new Error('Kotlin cannot compile a unit as both service and daemon');
+  if (!Number.isSafeInteger(daemonRefreshMs) || daemonRefreshMs < 10 || daemonRefreshMs > 180000)
+    throw new Error('Kotlin daemon refresh must be between 10 and 180000 ms');
   const program = parseKotlin(source, { fileName });
   let service = null;
   if (program.endpoints.length) {
@@ -57,13 +80,19 @@ export function compileKotlinToPcode(source, { fileName = 'program.kt', target =
         || program.hostImports.includes('importkotlin.test.assertEquals')
         || program.hostImports.includes('importkotlinx.coroutines.*')
         || program.hostImports.includes('importkotlinx.coroutines.yield')) : []),
-      ...(service ? hostFunctions.filter(item =>
+      ...hostFunctions.filter(item =>
         program.hostImports.includes(`importpulse.${item.module}.*`)
-        || program.hostImports.includes(`importpulse.${item.module}.${item.name}`)) : [])
+        || program.hostImports.includes(`importpulse.${item.module}.${item.name}`))
     ]
   });
-  if (service && /^CALL_EXT (?!host\.)/m.test(artifact.pcodeText))
-    throw new Error('Kotlin hosted services do not yet support scalar library calls such as integer division or integer-to-string conversion');
+  if (daemonId !== undefined) {
+    artifact.programMap.runtimeUnit = { kind: 'daemon', id: daemonId, refreshMs: daemonRefreshMs };
+    artifact.runtimeUnit = artifact.programMap.runtimeUnit;
+    artifact.programMap.targets = ['js', 'esp32'];
+    artifact.programMap.hostBindingsVersion = 1;
+  }
+  if (service && /^CALL_EXT (?!host\.|system\.int32\.tostring(?:\s|$))/m.test(artifact.pcodeText))
+    throw new Error('Kotlin hosted services do not yet support scalar library calls such as integer division');
   return artifact;
 }
 

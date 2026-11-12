@@ -7,7 +7,7 @@
     "url": "https://github.com/scobolguy/pulse-new-repo.git",
     "directory": "virtualMachines/esp32/extensions/pulse-pmachine-debugger"
   },
-  "version": "0.1.25",
+  "version": "0.1.26",
   "publisher": "pulse",
   "icon": "src/media/pulse-icon.png",
   "files": [
@@ -32,6 +32,7 @@
   ],
   "activationEvents": [
     "onDebug",
+    "onStartupFinished",
     "onCommand:pulse-pmachine.runCurrentFile",
     "onCommand:pulse-pmachine.debugCurrentFile",
     "onView:pulseCatalogStudio.dataLibrarian",
@@ -393,6 +394,10 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "pulseCatalogStudio.showDataLibrarian",
+        "title": "Pulse: Show Data Librarian"
+      },
+      {
         "command": "pulseCatalogStudio.openDataMapper",
         "title": "Pulse: Open Data Mapper"
       },
@@ -738,6 +743,9 @@
           "when": "editorLangId == screencobol"
         },
         {
+          "command": "pulseCatalogStudio.showDataLibrarian"
+        },
+        {
           "command": "pulse-pmachine.compileHardwareHandler",
           "when": "editorLangId == assemblerish"
         },
@@ -767,7 +775,12 @@
         "pulse-pmachine.backendUrl": {
           "type": "string",
           "default": "http://127.0.0.1:4000",
-          "description": "Aggregator backend URL used by Data Librarian, Data Mapper, service discovery, and PMachine programs."
+          "description": "Aggregator backend URL used by Data Mapper, service discovery, and PMachine programs."
+        },
+        "pulse-pmachine.dataLibrarianUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:4300",
+          "description": "Data Librarian service URL. The Data Librarian connects directly to this service and does not use the Aggregator."
         },
         "pulse-pmachine.connections": {
           "type": "array",

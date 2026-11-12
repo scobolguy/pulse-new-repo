@@ -14,6 +14,26 @@ The library implementation lives in `src/`:
 
 Standalone scheduler and dynamic-library C++ tests are already consolidated under `../../testing/pmachines/`.
 
+## Program bundle inventory
+
+`GET /api/pmachine/programs` lists installed manifests with their name, version,
+type, configured service index, and a `running` boolean. Running reflects a
+live hosted instance or an in-progress foreground bundle execution, not merely
+a persisted slot claim or a health check. The manifest describes the currently
+installed version, which may differ from a previously started instance.
+`GET /api/pmachine/programs/<name>` returns the installed manifest.
+`GET /pmachine/process-slots` separately reports slot assignments; a recovered
+slot can remain assigned even if its service did not start. If the hosted
+worker is busy, the inventory returns 503 rather than guessing running state;
+clients may retry. An unreadable or invalid manifest also produces an error
+instead of an incomplete list. The inventory supports at most 64 manifests
+and reports an error if that limit is exceeded.
+
+On a running device, `node testing\pmachines\verify-esp32-bundle-inventory.mjs
+<origin>` verifies inventory and individual lookups without changing services.
+Add `--cycle <bundle-name>` to stop and restart that hosted bundle and verify
+its running state changes; this temporarily interrupts the selected service.
+
 ## Generic COBOL migration
 
 COBOL text/date/math host functions are implemented by the separate
@@ -384,6 +404,13 @@ certification; the deployment guards above remain in force.
 
 ## Pascalish legacy Kasa service
 
+Kasa-specific discovery and HTTP routes are not built into the ESP32 host.
+Hosted applications register their own endpoints and use generic, allowlisted
+network exchanges. The old ESP32 `host.kasa_discover` binding is unavailable;
+`network_discovery_step` no longer discovers Kasa devices. A Pulse Kotlin
+single-address discovery example is in
+[`kasa-discovery-daemon.kt`](../../../../languages/kotlin/examples/kasa-discovery-daemon.kt).
+
 The protocol implementation is [kasa-legacy-service.pas](../../src/kasa-legacy-service.pas).
 It constructs Kasa JSON commands, performs the rolling XOR cipher (initial key
 171), constructs the four-byte big-endian TCP request header, decrypts replies,
@@ -661,9 +688,12 @@ maximum. This streams directly to local FFS storage rather than buffering
 large form values. Interrupted uploads may leave an incomplete file, which
 cannot pass the signed-image install checks.
 The worker's 16 KB stack is reserved before artifact
-loading. Six small service/daemon image control objects are statically reserved
-for the two-service ceiling. All images share four 512-byte FFS cache
-pages, plus only the hashes required by each file (maximum 64 pages for the
+loading. FFS-paged images share a cache of 512-byte image pages. On boards with
+PSRAM, its first use reserves one quarter of total PSRAM for the cache, including
+page metadata; allocation failure is reported rather than silently falling back.
+On boards without PSRAM, the shared cache remains four internal-memory pages.
+The PSRAM cache is direct-mapped and caches immutable image bytes only, not runtime
+stacks or heaps. Per-image hashes are also retained (maximum 64 pages for the
 default `bounded` profile, 256 for explicit `hostImageProfile: "extended"`),
 not a fully decoded instruction array or one large contiguous image-cache block.
 A shared-ownership lease returns a slot after a failed installation or stop,
@@ -684,9 +714,14 @@ compatibility. Host status reserves its measured output size before serializatio
 Signatures are checked by streaming the file; cache refills verify page hashes
 to reject changed or unreadable storage rather than execute replacement bytes.
 The open image must remain on local FFS storage for the service's lifetime.
-Status exposes instruction page reads, cache hits, heap and worker stack
+Status exposes instruction page reads, cache hits, shared cache storage, reserved
+bytes and page capacity, heap and worker stack
 headroom. This does not turn the separate program-image paging API into a
 disk-backed executor, and does not eliminate runtime JSON/socket allocations.
+With a running FFS-paged service, the non-destructive cache probe accepts its
+collector ID, a GET endpoint, and the expected reservation in bytes (zero on a
+board without PSRAM):
+`node testing\pmachines\verify-esp32-pcode-cache.mjs <origin> <collectorId> <endpoint> <bytes>`.
 With no host running, exercise image validation and paging on hardware with
 `node testing\pmachines\verify-esp32-hosted-image.mjs http://192.168.2.115`.
 Add `--single-worker` to also test concurrent requests, queue overflow,

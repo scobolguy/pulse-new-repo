@@ -1139,15 +1139,21 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
   const imports = tree.importHeader();
   const supportedImports = [
     'importkotlin.io.*', 'importkotlin.io.println', 'importpulse.http.HttpGet',
+    'importpulse.net.*', 'importpulse.net.networkDiscoveryStep',
+    'importpulse.process.*',
+    'importpulse.pmachine.*',
     'importkotlin.test.*', 'importkotlin.test.assertEquals',
     'importkotlinx.coroutines.*', 'importkotlinx.coroutines.yield',
     'importkotlin.coroutines.*', 'importkotlin.coroutines.Continuation',
     'importkotlin.coroutines.intrinsics.*', 'importhelpers.*',
     ...Object.keys(httpAnnotations).map(name => `importpulse.http.${name}`),
-    'importpulse.http.*', 'importpulse.net.*',
+    'importpulse.http.*', 'importpulse.net.*', 'importpulse.process.*',
     ...['requestBody', 'requestMethod', 'requestPath', 'requestPeer', 'requestQuery', 'requestHeader']
       .map(name => `importpulse.http.${name}`),
-    ...['tcpExchange', 'udpExchange'].map(name => `importpulse.net.${name}`)
+    ...['tcpExchange', 'udpExchange', 'localIpv4Subnets', 'kasaDiscover', 'cameraDiscover']
+      .map(name => `importpulse.net.${name}`),
+    ...['networkReady', 'installBundle', 'start', 'stop', 'status', 'checkpoint', 'restore', 'bootFixed']
+      .map(name => `importpulse.pmachine.${name}`)
   ];
   const unsupportedImport = imports.find(item => !supportedImports.includes(item.getText()));
   if (unsupportedImport) fail(location(unsupportedImport), 'Unsupported Kotlin import in the P-code subset');

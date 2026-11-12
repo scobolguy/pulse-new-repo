@@ -2679,6 +2679,8 @@ void setupWebServer() {
 #ifdef ENABLE_PMACHINE
 #ifndef DISABLE_PMACHINE_ROUTES
     registerPMachineRoutes(server, pm, &federatedFS);
+    if (!runPMachineFixedBoot(pm, &federatedFS))
+        Serial.println("[PMACHINE] Fixed boot unavailable; entering recovery mode");
 #endif
 #endif
     server.onNotFound(notFound);

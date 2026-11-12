@@ -2473,7 +2473,8 @@ class PulseInfrastructureTreeProvider {
       return getServiceItems()
     }
     if (element.kind === 'network-category') {
-      return getNetworkItems()
+      return Promise.all([getNetworkItems(), getDistributedNetworkItems()])
+        .then(([nodes, devices]) => [...nodes, ...devices])
     }
     if (element.kind === 'distributed-network-category') {
       return getDistributedNetworkItems()

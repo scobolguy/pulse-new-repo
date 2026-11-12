@@ -28,7 +28,9 @@ export function executeSystemIntrinsic(name, args) {
   }
   if (name === 'system.exception.throw') {
     if (args.length !== 1) throw new TypeError('Kotlin throw requires one value');
-    throw new Error(`KotlinThrow: ${String(args[0])}`);
+    const error = new Error(`KotlinThrow: ${String(args[0])}`);
+    error.pcodeValue = args[0];
+    throw error;
   }
   if (name === 'system.assert.equals') {
     if (!args.every(Number.isInteger))

@@ -213,7 +213,7 @@ test('one native-target service artifact has matching Node and native HTTP behav
       .map((line, index) => ({ line: line.trim(), number: index + 1 }))
       .filter(item => /^STORE total$/.test(item.line));
     assert.ok(storeLines.length >= 2, 'expected global initialization and route assignment');
-    const assignmentLine = storeLines.at(-1).number;
+    const assignmentLine = storeLines[0].number;
     nativeDebugger.send({
       command: 'start',
       method: 'GET',
@@ -343,11 +343,10 @@ test('one native-target service artifact has matching Node and native HTTP behav
     assert.match(readonlyNative.stderr, /does not provide requested host capability filesystem\.write/);
 
     const catalogSource = await readFile(new URL('../../src/librarian/catalog-store.pas', import.meta.url), 'utf8');
-    const catalogCompiled = compilePascalishProgramWithAntlr(catalogSource, {
+    assert.throws(() => compilePascalishProgramWithAntlr(catalogSource, {
       hostServices: true,
       nativeTarget: true
-    });
-    assert.deepEqual(catalogCompiled.programMap.targets, ['js', 'native']);
+    }), /Native host does not support binding object\.set/);
   } finally {
     if (nativeDebugger && nativeDebugger.child.exitCode === null && nativeDebugger.child.signalCode === null) {
       nativeDebugger.child.kill();

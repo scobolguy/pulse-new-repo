@@ -74,6 +74,7 @@ import { registerHelloServiceRoutes } from './src/backend/roles/helloServiceRout
 import { registerProvisioningAgentRoutes } from './src/backend/roles/provisioningAgentRoutes.mjs';
 import { registerDevelopDocumentRoutes } from './src/backend/developDocumentRoutes.mjs';
 import { registerPmachineDeploymentRoutes } from './src/backend/pmachineDeploymentRoutes.mjs';
+import { registerPmachineProgramRoutes } from './src/backend/modules/pmachineProgramRoutes.mjs';
 import { registerFlowDeploymentRoutes } from './src/backend/flowDeploymentRoutes.mjs';
 import { registerProjectWorkspaceRoutes } from './src/backend/projectWorkspaceRoutes.mjs';
 import { registerTransformerServiceRoutes } from './src/backend/transformerServiceRoutes.mjs';
@@ -594,7 +595,10 @@ const MANAGER_ACTIVE_STATES = new Set(['up', 'degraded']);
 const MANAGER_SYNC_STATES = new Set(['syncing', 'sync-failed']);
 const serviceInstanceRegistry = new Map();
 const ffsDeploymentRegistry = new Map();
-const jsPmachineDeploymentSupervisor = createJsPmachineDeploymentSupervisor();
+const jsPmachineDeploymentSupervisor = createJsPmachineDeploymentSupervisor({
+  statePath: path.join(RUNTIME_DATA_ROOT, 'pmachine', 'supervisor-state.json'),
+  bootDirectory: path.join(RUNTIME_DATA_ROOT, 'pmachine', 'boot')
+});
 const federatedFfsRoot = path.join(RUNTIME_DATA_ROOT, 'federated-ffs');
 const deploymentIndexPath = path.join(federatedFfsRoot, 'service-deployments.json');
 const localQueueManagerProcesses = new Map();
@@ -9923,6 +9927,10 @@ function registerRoutes(app) {
   });
   registerJavaScriptPmachineDebuggerRoutes(app);
   registerPmachineDeploymentRoutes(app);
+  registerPmachineProgramRoutes(app, {
+    root: path.join(RUNTIME_DATA_ROOT, 'pmachine'),
+    supervisor: jsPmachineDeploymentSupervisor
+  });
   registerFlowDeploymentRoutes(app, { runtimeRoot: RUNTIME_DATA_ROOT });
   registerDatabaseRoutes(app, { databaseManagers: databaseManagerInstances });
   registerServiceProcessRoutes(app, { serviceProcessManager, requirePermission });

@@ -3855,6 +3855,9 @@ const NATIVE_SERVICE_BINDINGS = new Set([
   'host.fs_read_text', 'host.fs_read_text_auto', 'host.fs_write_text', 'host.fs_exists',
   'host.fs_resolve_relative', 'host.service_submit', 'host.await_reply',
   'host.bytes_from_text', 'host.bytes_text', 'host.bytes_length', 'host.bytes_get', 'host.bytes_join'
+  , 'host.local_ipv4_subnets', 'host.kasa_discover', 'host.camera_discover',
+  'host.network_discovery_step', 'host.checkpoint_process', 'host.restore_checkpoint',
+  'host.begin_transaction', 'host.commit_transaction', 'host.abort_transaction'
 ]);
 
 function advertiseNativeTarget(pcodeText, programMap) {

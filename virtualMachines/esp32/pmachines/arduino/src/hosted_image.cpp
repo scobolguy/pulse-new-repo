@@ -5,6 +5,7 @@
 #include <mbedtls/sha256.h>
 #include <cstring>
 #include <esp_heap_caps.h>
+#include <new>
 
 namespace pmachine {
 namespace {
@@ -17,11 +18,38 @@ HostedImage::SharedCache& HostedImage::sharedCache() {
     static SharedCache cache;
     return cache;
 }
+bool HostedImage::initializeCache(SharedCache& cache, std::string& error) {
+    if (cache.psramPages || !ESP.getPsramSize()) return true;
+    const size_t budget = ESP.getPsramSize() / 4;
+    const size_t pageCount = budget / sizeof(Page);
+    if (!pageCount) { error = "PSRAM too small for hosted instruction cache"; return false; }
+    void* memory = heap_caps_malloc(budget, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!memory) { error = "Insufficient PSRAM for hosted instruction cache"; return false; }
+    auto* pages = static_cast<Page*>(memory);
+    for (size_t i = 0; i < pageCount; ++i) new (&pages[i]) Page();
+    cache.psramPages = pages;
+    cache.psramPageCount = pageCount;
+    cache.reservedBytes = budget;
+    return true;
+}
+HostedImage::CacheStats HostedImage::cacheStats() {
+    auto& cache = sharedCache();
+    if (!cache.mutex || xSemaphoreTake(cache.mutex, portMAX_DELAY) != pdTRUE) return {0, 0, false};
+    CacheRelease release{cache.mutex};
+    return {cache.reservedBytes, cache.psramPages ? cache.psramPageCount : CACHE_PAGES,
+            cache.psramPages != nullptr};
+}
 void HostedImage::reset() {
     auto& cache = sharedCache();
     if (cache.mutex && xSemaphoreTake(cache.mutex, portMAX_DELAY) == pdTRUE) {
         for (auto& page : cache.pages) if (page.owner == this) {
             page.owner = nullptr; page.number = MAX_PAGES; page.length = 0; page.age = 0;
+        }
+        for (size_t i = 0; i < cache.psramPageCount; ++i) {
+            auto& page = cache.psramPages[i];
+            if (page.owner == this) {
+                page.owner = nullptr; page.number = MAX_PAGES; page.length = 0; page.age = 0;
+            }
         }
         xSemaphoreGive(cache.mutex);
     }
@@ -81,9 +109,9 @@ bool HostedImage::open(FederatedFileSystem& ffs, const String& path, const JsonD
     }
     uint8_t magic[4];
     uint32_t instructionCount, constants;
-    if (!readBytes(0, magic, 4, error) || memcmp(magic, "PHI1", 4)
-        || !hex(4, 8, instructionCount, error) || !hex(12, 8, constants, error)
-        || instructionCount < 1 || instructionCount > (extended ? 4096 : 512)
+    if (!readBytes(0, magic, 4, error)
+        || !hex(4, 8, instructionCount, error) || !hex(12, 8, constants, error)) return false;
+    if (memcmp(magic, "PHI1", 4) || instructionCount < 1 || instructionCount > (extended ? 4096 : 512)
         || constants > (PAGE_BYTES * MAX_PAGES - 20) / 2
         || fileBytes != 20 + instructionCount * 24 + constants * 2) {
         error = "Invalid hosted image header"; return false;
@@ -107,14 +135,22 @@ bool HostedImage::readBytes(size_t offset, uint8_t* target, size_t length, std::
         error = "Hosted instruction cache unavailable"; return false;
     }
     CacheRelease release{cache.mutex};
+    if (!initializeCache(cache, error)) return false;
     while (length) {
         const size_t number = offset / PAGE_BYTES;
         Page* page = nullptr;
-        for (auto& item : cache.pages) if (item.owner == this && item.number == number) { page = &item; break; }
-        if (page) ++cacheHits;
+        if (cache.psramPages) {
+            const size_t ownerHash = reinterpret_cast<uintptr_t>(this) >> 4;
+            page = &cache.psramPages[(ownerHash * 2654435761u + number) % cache.psramPageCount];
+        } else {
+            for (auto& item : cache.pages) if (item.owner == this && item.number == number) { page = &item; break; }
+            if (!page) {
+                page = &cache.pages[0];
+                for (auto& item : cache.pages) if (item.age < page->age) page = &item;
+            }
+        }
+        if (page->owner == this && page->number == number) ++cacheHits;
         else {
-            page = &cache.pages[0];
-            for (auto& item : cache.pages) if (item.age < page->age) page = &item;
             page->owner = nullptr;
             page->number = MAX_PAGES;
             page->length = std::min(PAGE_BYTES, fileBytes - number * PAGE_BYTES);
@@ -129,11 +165,13 @@ bool HostedImage::readBytes(size_t offset, uint8_t* target, size_t length, std::
             page->number = number;
             ++pageReads;
         }
-        if (++cache.tick == 0) {
-            for (auto& item : cache.pages) item.age = 0;
-            cache.tick = 1;
+        if (!cache.psramPages) {
+            if (++cache.tick == 0) {
+                for (auto& item : cache.pages) item.age = 0;
+                cache.tick = 1;
+            }
+            page->age = cache.tick;
         }
-        page->age = cache.tick;
         const size_t amount = std::min(length, page->length - offset % PAGE_BYTES);
         memcpy(target, page->bytes.data() + offset % PAGE_BYTES, amount);
         offset += amount; target += amount; length -= amount;

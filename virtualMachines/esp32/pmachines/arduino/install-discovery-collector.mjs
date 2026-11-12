@@ -17,6 +17,21 @@ async function request(path, values) {
   if (!response.ok) throw new Error(`${path}: HTTP ${response.status}: ${text}`);
   return text;
 }
+async function upload(file, body) {
+  const payload = Buffer.from(body, 'utf8');
+  const response = await fetch(new URL(`/ffs/upload_stream?file=${encodeURIComponent(file)}`, origin), {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/octet-stream',
+      'content-length': String(payload.length)
+    },
+    body: payload,
+    signal: AbortSignal.timeout(30000)
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`/ffs/upload_stream: HTTP ${response.status}: ${text}`);
+  return text;
+}
 const status = JSON.parse(await request('/pmachine/service_host/status'));
 if (status.running || status.busy) throw new Error('Host already active; stop it explicitly before replacing units');
 const device = JSON.parse(await request('/status'));
@@ -31,10 +46,11 @@ for (const [kind, name] of [['service', 'discovery-collector-service'], ['daemon
     if (!Array.isArray(tableConfiguration.tables)) throw new Error('Invalid discovery host table configuration');
     compiled.programMap.hostTables = tableConfiguration.tables;
   }
-  files[kind] = { file: `/${name}.pcode`, map: `/${name}.program.json` };
-  await request('/ffs/upload', { file: files[kind].file, body: compiled.pcodeText });
-  await request('/ffs/upload', { file: files[kind].map,
-    body: JSON.stringify(attachPcodeSignature(compactServiceHostProgramMap(compiled.programMap), compiled.pcodeText)) });
+  const fileStem = kind === 'service' ? 'netdisc' : 'netmaint';
+  files[kind] = { file: `/${fileStem}.pcode`, map: `/${fileStem}.json` };
+  await upload(files[kind].file, compiled.pcodeText);
+  await upload(files[kind].map,
+    JSON.stringify(attachPcodeSignature(compactServiceHostProgramMap(compiled.programMap), compiled.pcodeText)));
 }
 await request('/pmachine/service_host/install', {
   serviceFile: files.service.file, serviceMap: files.service.map,
@@ -45,6 +61,8 @@ await request('/pmachine/service_host/install', {
 });
 const installed = JSON.parse(await request('/pmachine/service_host/status'));
 if (!installed.running) throw new Error(`Host did not start: ${JSON.stringify(installed)}`);
-const snapshot = JSON.parse(await request('/api/discovery/snapshot'));
-if (snapshot.protocolVersion !== 1 || !Array.isArray(snapshot.nodes)) throw new Error('Invalid collector snapshot');
+const snapshot = JSON.parse(await request('/api/network/discovery'));
+if (snapshot.protocolVersion !== 1 || !snapshot.kasa || !snapshot.cameras) {
+  throw new Error('Invalid network discovery snapshot');
+}
 console.log(JSON.stringify(installed, null, 2));

@@ -156,6 +156,12 @@ export default class KotlinVisitor extends antlr4.tree.ParseTreeVisitor {
 	}
 
 
+	// Visit a parse tree produced by KotlinParser#functionReceiver.
+	visitFunctionReceiver(ctx) {
+	  return this.visitChildren(ctx);
+	}
+
+
 	// Visit a parse tree produced by KotlinParser#functionBody.
 	visitFunctionBody(ctx) {
 	  return this.visitChildren(ctx);

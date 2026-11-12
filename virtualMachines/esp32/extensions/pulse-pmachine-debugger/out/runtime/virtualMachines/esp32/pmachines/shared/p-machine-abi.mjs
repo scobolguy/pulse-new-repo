@@ -2,8 +2,9 @@ export const PMACHINE_ABI = Object.freeze({
   id: 'pulse.pmachine',
   version: 1,
   opcodeManifestVersion: 1,
-  features: Object.freeze(['scalar', 'coroutine.yield', 'null.value', 'reference.heap']),
-  referenceAbiVersion: 1
+  features: Object.freeze(['scalar', 'coroutine.yield', 'null.value', 'reference.heap', 'exception.frames']),
+  referenceAbiVersion: 1,
+  exceptionAbiVersion: 1
 });
 
 export function validatePmachineAbi(descriptor) {
@@ -16,5 +17,9 @@ export function validatePmachineAbi(descriptor) {
   if (descriptor.referenceAbiVersion !== undefined
       && descriptor.referenceAbiVersion !== PMACHINE_ABI.referenceAbiVersion) {
     throw new Error(`Unsupported reference ABI: expected v${PMACHINE_ABI.referenceAbiVersion}`);
+  }
+  if (descriptor.exceptionAbiVersion !== undefined
+      && descriptor.exceptionAbiVersion !== PMACHINE_ABI.exceptionAbiVersion) {
+    throw new Error(`Unsupported exception ABI: expected v${PMACHINE_ABI.exceptionAbiVersion}`);
   }
 }

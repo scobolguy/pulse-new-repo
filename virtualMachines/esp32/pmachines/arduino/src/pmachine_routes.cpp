@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include "pmachine_routes.h"
+#include "pmachine_process_slots.h"
 #if defined(ESP32)
 #include "service_host.h"
 #include "assemblerish_hal.h"
@@ -12,6 +13,8 @@
 #include <atomic>
 #include <cstring>
 #include <strings.h>
+#include <mbedtls/base64.h>
+#include <mbedtls/sha256.h>
 
 namespace {
 
@@ -120,6 +123,8 @@ public:
         if (!method || !host.handles(method, request->url().c_str())) return false;
         // AsyncWebServer discards unregistered headers after selecting a handler.
         request->addInterestingHeader("ANY");
+        request->addInterestingHeader("x-pulse-transaction-id");
+        request->addInterestingHeader("x-pulse-ingress-aggregator-id");
         return true;
     }
     void handleBody(AsyncWebServerRequest* request, uint8_t* data, size_t len,
@@ -161,6 +166,7 @@ public:
 
 class AssemblerishInstallWebHandler : public AsyncWebHandler {
     std::function<void(AsyncWebServerRequest*, JsonDocument&)> install;
+    String route;
     struct Body {
         size_t received, total;
         bool invalid;
@@ -168,10 +174,11 @@ class AssemblerishInstallWebHandler : public AsyncWebHandler {
     };
 public:
     explicit AssemblerishInstallWebHandler(
+        const char* routePath,
         std::function<void(AsyncWebServerRequest*, JsonDocument&)> callback)
-        : install(std::move(callback)) {}
+        : install(std::move(callback)), route(routePath) {}
     bool canHandle(AsyncWebServerRequest* request) override {
-        return request->method() == HTTP_POST && request->url() == "/pmachine/assemblerish";
+        return request->method() == HTTP_POST && request->url() == route;
     }
     void handleBody(AsyncWebServerRequest* request, uint8_t* data, size_t len,
                     size_t index, size_t total) override {
@@ -208,6 +215,74 @@ public:
         }
     }
 };
+
+bool decodeBundleFile(const char* encoded, std::vector<uint8_t>& output) {
+    if (encoded == nullptr) return false;
+    const size_t encodedLength = strlen(encoded);
+    size_t outputLength = 0;
+    if (mbedtls_base64_decode(nullptr, 0, &outputLength,
+                              reinterpret_cast<const unsigned char*>(encoded),
+                              encodedLength) != MBEDTLS_ERR_BASE64_BUFFER_TOO_SMALL) {
+        return false;
+    }
+    output.resize(outputLength);
+    return mbedtls_base64_decode(output.data(), output.size(), &outputLength,
+                                 reinterpret_cast<const unsigned char*>(encoded),
+                                 encodedLength) == 0;
+}
+
+bool safeBundlePath(const char* path) {
+    if (path == nullptr || *path == '\0' || strlen(path) > 128 || path[0] == '/') return false;
+    const char* segment = path;
+    for (const char* cursor = path; ; ++cursor) {
+        if (*cursor == '\\') return false;
+        if (*cursor != '/' && *cursor != '\0') continue;
+        const size_t length = static_cast<size_t>(cursor - segment);
+        if (length == 0 || (length == 1 && segment[0] == '.')
+            || (length == 2 && segment[0] == '.' && segment[1] == '.')) return false;
+        if (*cursor == '\0') break;
+        segment = cursor + 1;
+    }
+    return true;
+}
+
+bool safeBundleName(const char* name) {
+    if (name == nullptr || *name == '\0' || strlen(name) > 80) return false;
+    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) return false;
+    for (const char* cursor = name; *cursor != '\0'; ++cursor) {
+        if (!(isalnum(static_cast<unsigned char>(*cursor)) || *cursor == '-' ||
+              *cursor == '_' || *cursor == '.')) return false;
+    }
+    return true;
+}
+
+bool ensureBundleDirectory(FederatedFileSystem& ffs, const String& directory) {
+    String path;
+    auto ensureDirectory = [&ffs](const String& candidate) {
+        if (ffs.mkdir(candidate)) return true;
+        File existing = ffs.openDirectory(candidate);
+        return existing && existing.isDirectory();
+    };
+    for (size_t index = 0; index < directory.length(); ++index) {
+        if (directory[index] == '/' && path.length() > 1 && !ensureDirectory(path)) return false;
+        path += directory[index];
+    }
+    return ensureDirectory(path);
+}
+
+String sha256Hex(const std::vector<uint8_t>& bytes) {
+    unsigned char digest[32];
+    if (mbedtls_sha256_ret(bytes.data(), bytes.size(), digest, 0) != 0) return "";
+    static const char hex[] = "0123456789abcdef";
+    String result;
+    result.reserve(64);
+    for (unsigned char value : digest) {
+        result += hex[value >> 4];
+        result += hex[value & 0x0f];
+    }
+    return result;
+}
+
 #endif
 
 extern bool pmachineInvokeFsm(
@@ -220,6 +295,7 @@ extern bool pmachineInvokeFsm(
 #include <LittleFS.h>
 #include "profile_config.h"
 #include <map>
+#include <set>
 #include <deque>
 #include <vector>
 #include <utility>
@@ -3577,6 +3653,131 @@ void configurePMachineHostedStorage(FederatedFileSystem& ffs) {
 #endif
 }
 
+static bool persistProcessSlots(FederatedFileSystem* ffs,
+                                const pmachine::PmachineProcessSlots& slots,
+                                std::string& error) {
+    if (ffs == nullptr) {
+        error = "FFS unavailable";
+        return false;
+    }
+    File directory = ffs->openDirectory("/pmachine");
+    if (!directory || !directory.isDirectory()) {
+        directory.close();
+        if (!ffs->mkdir("/pmachine")) {
+            directory = ffs->openDirectory("/pmachine");
+            if (!directory || !directory.isDirectory()) {
+                error = "unable to create process slot directory";
+                return false;
+            }
+        }
+    }
+    directory.close();
+    const std::string state = slots.serialize();
+    const String temporaryPath = "/pmachine/process-slots.json.tmp";
+    if (ffs->write(temporaryPath, reinterpret_cast<const uint8_t*>(state.data()), state.size())
+        != FFSStatus::OK
+        || ffs->replace(temporaryPath, "/pmachine/process-slots.json") != FFSStatus::OK) {
+        error = "unable to persist process slot state";
+        return false;
+    }
+    return true;
+}
+
+namespace {
+String fixedBootState = "recovery";
+String fixedBootReason = "fixed boot file is missing";
+}
+
+#if defined(ESP32)
+namespace {
+portMUX_TYPE foregroundBundleMux = portMUX_INITIALIZER_UNLOCKED;
+char foregroundBundleName[81] = {};
+struct ForegroundBundleExecution {
+    explicit ForegroundBundleExecution(const String& name) {
+        portENTER_CRITICAL(&foregroundBundleMux);
+        snprintf(foregroundBundleName, sizeof(foregroundBundleName), "%s", name.c_str());
+        portEXIT_CRITICAL(&foregroundBundleMux);
+    }
+    ~ForegroundBundleExecution() {
+        portENTER_CRITICAL(&foregroundBundleMux);
+        foregroundBundleName[0] = '\0';
+        portEXIT_CRITICAL(&foregroundBundleMux);
+    }
+};
+
+String entryBaseName(const File& entry) {
+    String name = entry.name();
+    while (name.endsWith("/")) name.remove(name.length() - 1);
+    const int separator = name.lastIndexOf('/');
+    return separator < 0 ? name : name.substring(separator + 1);
+}
+
+bool directoryContains(File& directory, const char* name) {
+    for (File entry = directory.openNextFile(); entry; entry = directory.openNextFile()) {
+        if (entryBaseName(entry) == name) return true;
+    }
+    return false;
+}
+}
+
+static bool loadHostedBundleUnit(FederatedFileSystem& ffs, const String& unitPath,
+                                 const String& mapPath, const char* kind,
+                                 pmachine::ServiceHost::Unit& unit, std::string& error) {
+    JsonDocument map;
+    if (!deserializeDocFromPath(mapPath, &ffs, map)) {
+        error = "Unable to load hosted bundle artifacts";
+        return false;
+    }
+    if (std::string(map["hostImageFormat"] | "") == "PHI1") {
+        return pmachine::ServiceHost::loadImage(ffs, unitPath, map, kind,
+            PROFILE_PCODE_SIGNING_KEY, PROFILE_PCODE_SIGNING_KEY_ID, unit, error);
+    }
+    String pcode;
+    if (!readTextFromPath(unitPath, &ffs, pcode)) {
+        error = "Unable to load hosted bundle artifacts";
+        return false;
+    }
+    String signatureError;
+    if (!verifySignedPcode(pcode, map, signatureError)) {
+        error = signatureError.c_str();
+        return false;
+    }
+    return pmachine::ServiceHost::parseUnit(std::string(pcode.c_str()), map, kind, unit, error);
+}
+#endif
+
+bool runPMachineFixedBoot(pmachine::PMachine& machine, FederatedFileSystem* ffs) {
+    constexpr const char* fixedBootPath = "/boot/pmachine-boot";
+    fixedBootState = "recovery";
+    fixedBootReason = "fixed boot file is missing";
+    if (ffs == nullptr) {
+        fixedBootReason = "FFS unavailable";
+        return false;
+    }
+    std::vector<uint8_t> bytes;
+    if (ffs->read(fixedBootPath, bytes) != FFSStatus::OK || bytes.empty()) return false;
+    if (bytes.size() > 65536) {
+        fixedBootReason = "fixed boot file exceeds 65536 bytes";
+        return false;
+    }
+    const std::string source(bytes.begin(), bytes.end());
+    std::vector<pmachine::PInstruction> instructions;
+    try {
+        instructions = pmachine::loadTextPCode(source);
+    } catch (const std::exception&) {
+        fixedBootReason = "fixed boot file is invalid pcode";
+        return false;
+    }
+    if (instructions.empty()) {
+        fixedBootReason = "fixed boot file contains no instructions";
+        return false;
+    }
+    machine.run(instructions);
+    fixedBootState = "ready";
+    fixedBootReason = "fixed boot program executed";
+    return true;
+}
+
 void pmachineLearnAggregator(const char* aggregatorId, const char* address, uint16_t httpPort) {
 #if defined(ESP32)
     hostedServiceHost().learnAggregator(aggregatorId, address, httpPort);
@@ -3593,7 +3794,509 @@ void registerPMachineRoutes(
 ) {
 #if defined(ESP32)
     static pmachine::ServiceHost& serviceHost = hostedServiceHost();
-    server.addHandler(new AssemblerishInstallWebHandler(
+    static pmachine::PmachineProcessSlots processSlots;
+    server.on("/pmachine/boot/status", HTTP_GET, [](AsyncWebServerRequest* request) {
+        JsonDocument status;
+        status["state"] = fixedBootState;
+        status["reason"] = fixedBootReason;
+        status["file"] = "/boot/pmachine-boot";
+        String text;
+        serializeJson(status, text);
+        request->send(200, "application/json", text);
+    });
+    server.addHandler(new AssemblerishInstallWebHandler("/api/pmachine/programs",
+        [ffs](AsyncWebServerRequest* request, JsonDocument& body) {
+            JsonObject manifest = body["manifest"].as<JsonObject>();
+            const char* name = body["name"] | "";
+            const char* manifestName = manifest["name"] | "";
+            const char* version = manifest["version"] | "";
+            const char* type = manifest["type"] | "";
+            const char* entry = manifest["entry"] | "";
+            const char* programMap = manifest["programMap"] | "program.map.json";
+            const char* serviceEntry = manifest["serviceEntry"] | "";
+            const char* serviceProgramMap = manifest["serviceProgramMap"] | "";
+            const char* requestedDigest = manifest["sha256"] | "";
+            JsonArrayConst files = body["files"].as<JsonArrayConst>();
+            if (!safeBundleName(name) || !manifest || strcmp(name, manifestName) != 0
+                || !safeBundleName(version) || !safeBundlePath(entry)
+                || !safeBundlePath(programMap)
+                || !body["files"].is<JsonArrayConst>() || files.size() == 0 || files.size() > 16
+                || (strcmp(type, "resident") != 0 && strcmp(type, "transient") != 0
+                    && strcmp(type, "service") != 0 && strcmp(type, "daemon") != 0
+                    && strcmp(type, "program") != 0)) {
+                request->send(400, "text/plain", "Invalid bundle manifest");
+                return;
+            }
+            if (strcmp(type, "daemon") == 0
+                && (!safeBundlePath(serviceEntry) || !safeBundlePath(serviceProgramMap))) {
+                request->send(400, "text/plain", "Daemon bundle requires serviceEntry and serviceProgramMap");
+                return;
+            }
+            const bool hosted = strcmp(type, "service") == 0 || strcmp(type, "daemon") == 0;
+            if (hosted && (!manifest["serviceIndex"].is<uint8_t>()
+                || manifest["serviceIndex"].as<uint8_t>() < 1
+                || manifest["serviceIndex"].as<uint8_t>() > pmachine::PMACHINE_SERVICE_LIMIT)) {
+                request->send(400, "text/plain", "Service and daemon bundles require serviceIndex 1..15");
+                return;
+            }
+            if (strlen(requestedDigest) != 0 && strlen(requestedDigest) != 64) {
+                request->send(400, "text/plain", "Invalid SHA-256 entry digest");
+                return;
+            }
+            if (ffs == nullptr) {
+                request->send(503, "text/plain", "FFS unavailable");
+                return;
+            }
+            const String base = String("/pmachine/programs/") + name;
+            char uniqueSuffix[20];
+            snprintf(uniqueSuffix, sizeof(uniqueSuffix), "%08lx", static_cast<unsigned long>(esp_random()));
+            const String versionDirectory = base + "/versions/" + version + "-" + uniqueSuffix;
+            if (!ensureBundleDirectory(*ffs, versionDirectory)) {
+                request->send(503, "text/plain", "Unable to create bundle staging directory");
+                return;
+            }
+            std::set<std::string> seen;
+            size_t totalBytes = 0;
+            bool hasEntry = false;
+            bool hasMap = false;
+            bool hasServiceEntry = false;
+            bool hasServiceMap = false;
+            String actualDigest;
+            for (JsonObjectConst file : files) {
+                const char* path = file["path"] | "";
+                const char* encoded = file["base64"] | "";
+                if (!safeBundlePath(path) || !*encoded || !seen.insert(path).second) {
+                    request->send(400, "text/plain", "Invalid or duplicate bundle support file");
+                    return;
+                }
+                std::vector<uint8_t> contents;
+                if (!decodeBundleFile(encoded, contents) || contents.empty() || contents.size() > 16384
+                    || totalBytes > 32768 - contents.size()) {
+                    request->send(400, "text/plain", "Invalid or oversized bundle file");
+                    return;
+                }
+                totalBytes += contents.size();
+                if (strcmp(path, entry) == 0) {
+                    hasEntry = true;
+                    actualDigest = sha256Hex(contents);
+                    if (actualDigest.isEmpty()
+                        || (strlen(requestedDigest) == 64 && !actualDigest.equalsIgnoreCase(requestedDigest))) {
+                        request->send(400, "text/plain", "Manifest entry hash does not match");
+                        return;
+                    }
+                }
+                if (strcmp(path, programMap) == 0) hasMap = true;
+                if (strcmp(path, serviceEntry) == 0) hasServiceEntry = true;
+                if (strcmp(path, serviceProgramMap) == 0) hasServiceMap = true;
+                const String destination = versionDirectory + "/" + path;
+                const int slash = destination.lastIndexOf('/');
+                if (slash > 0 && !ensureBundleDirectory(*ffs, destination.substring(0, slash))) {
+                    request->send(503, "text/plain", "Unable to create bundle support directory");
+                    return;
+                }
+                const String temporary = destination + ".tmp";
+                if (ffs->write(temporary, contents.data(), contents.size()) != FFSStatus::OK
+                    || ffs->replace(temporary, destination) != FFSStatus::OK) {
+                    request->send(503, "text/plain", "Unable to stage bundle file");
+                    return;
+                }
+            }
+            if (!hasEntry || !hasMap) {
+                request->send(400, "text/plain", "Bundle entry and programMap must be included");
+                return;
+            }
+            if (strcmp(type, "daemon") == 0 && (!hasServiceEntry || !hasServiceMap)) {
+                request->send(400, "text/plain", "Daemon bundle service entry and map must be included");
+                return;
+            }
+            if (strcmp(type, "daemon") == 0
+                && (!manifest["udpPort"].is<uint32_t>() || manifest["udpPort"].as<uint32_t>() > 65535)) {
+                request->send(400, "text/plain", "Daemon bundle udpPort must be an integer from 0 through 65535");
+                return;
+            }
+            manifest["sha256"] = actualDigest;
+            manifest["storagePath"] = versionDirectory;
+            String manifestText;
+            serializeJson(manifest, manifestText);
+            if (!ensureBundleDirectory(*ffs, base)
+                || ffs->write(base + "/manifest.json.tmp",
+                              reinterpret_cast<const uint8_t*>(manifestText.c_str()),
+                              manifestText.length()) != FFSStatus::OK
+                || ffs->replace(base + "/manifest.json.tmp", base + "/manifest.json") != FFSStatus::OK) {
+                request->send(503, "text/plain", "Unable to activate bundle manifest");
+                return;
+            }
+            JsonDocument result;
+            result["installed"] = true;
+            result["name"] = name;
+            result["version"] = version;
+            result["sha256"] = actualDigest;
+            String response;
+            serializeJson(result, response);
+            request->send(201, "application/json", response);
+        }));
+    server.on("^\\/api\\/pmachine\\/programs$", HTTP_GET, [ffs](AsyncWebServerRequest* request) {
+        if (ffs == nullptr) { request->send(503, "text/plain", "FFS unavailable"); return; }
+        try {
+        std::vector<std::string> running;
+        if (!serviceHost.runningCollectorIds(running)) {
+            request->send(503, "text/plain", "Service host busy");
+            return;
+        }
+        char foreground[sizeof(foregroundBundleName)];
+        portENTER_CRITICAL(&foregroundBundleMux);
+        memcpy(foreground, foregroundBundleName, sizeof(foreground));
+        portEXIT_CRITICAL(&foregroundBundleMux);
+        File directory = ffs->openDirectory("/pmachine/programs");
+        if (!directory) {
+            File parent = ffs->openDirectory("/pmachine");
+            if (!parent) {
+                File root = ffs->openDirectory("/");
+                if (!root || !root.isDirectory() || directoryContains(root, "pmachine")) {
+                    request->send(503, "text/plain", "Unable to open bundle directory");
+                    return;
+                }
+            } else if (!parent.isDirectory() || directoryContains(parent, "programs")) {
+                request->send(503, "text/plain", "Unable to open bundle directory");
+                return;
+            }
+        } else if (!directory.isDirectory()) {
+            request->send(503, "text/plain", "Bundle directory is not a directory");
+            return;
+        }
+        JsonDocument result;
+        JsonArray bundles = result["programs"].to<JsonArray>();
+        size_t count = 0;
+        for (File entry = directory ? directory.openNextFile() : File(); entry; entry = directory.openNextFile()) {
+            if (!entry.isDirectory()) continue;
+            const String name = entryBaseName(entry);
+            if (!safeBundleName(name.c_str()) || !directoryContains(entry, "manifest.json")) continue;
+            if (count == 64) {
+                request->send(503, "text/plain", "Too many bundle manifests to list");
+                return;
+            }
+            const String path = String("/pmachine/programs/") + name + "/manifest.json";
+            std::vector<uint8_t> bytes;
+            if (ffs->read(path, bytes) != FFSStatus::OK || bytes.empty()) {
+                request->send(503, "text/plain", "Unable to read bundle manifest");
+                return;
+            }
+            JsonDocument manifest;
+            if (deserializeJson(manifest, bytes.data(), bytes.size()) || !manifest.is<JsonObject>()
+                || !manifest["name"].is<const char*>()
+                || name != manifest["name"].as<const char*>()) {
+                request->send(500, "text/plain", "Stored bundle manifest is invalid");
+                return;
+            }
+            JsonObject item = bundles.add<JsonObject>();
+            item["name"] = manifest["name"];
+            item["version"] = manifest["version"];
+            item["type"] = manifest["type"];
+            item["serviceIndex"] = manifest["serviceIndex"];
+            const std::string collectorId = std::string("bundle-") + name.c_str();
+            item["running"] = name == foreground || std::find(running.begin(), running.end(), collectorId) != running.end();
+            ++count;
+        }
+        if (result.overflowed()) { request->send(503, "text/plain", "Unable to allocate bundle list"); return; }
+        String text;
+        serializeJson(result, text);
+        request->send(200, "application/json", text);
+        } catch (const std::bad_alloc&) {
+            Serial.println("[PMACHINE] Bundle list allocation failed");
+            request->send(503, "text/plain", "Bundle list allocation failed");
+        }
+    });
+    server.on("^\\/api\\/pmachine\\/programs\\/([A-Za-z0-9_.-]+)$", HTTP_GET, [ffs](AsyncWebServerRequest* request) {
+        const String name = request->pathArg(0);
+        if (!safeBundleName(name.c_str())) { request->send(400, "text/plain", "Invalid bundle name"); return; }
+        std::vector<uint8_t> bytes;
+        const String manifestPath = String("/pmachine/programs/") + name + "/manifest.json";
+        if (ffs == nullptr || ffs->read(manifestPath, bytes) != FFSStatus::OK || bytes.empty()) {
+            request->send(404, "text/plain", "Program bundle not found");
+            return;
+        }
+        JsonDocument manifest;
+        if (deserializeJson(manifest, bytes.data(), bytes.size()) || !manifest.is<JsonObject>()) {
+            request->send(500, "text/plain", "Stored bundle manifest is invalid");
+            return;
+        }
+        String text;
+        serializeJson(manifest, text);
+        request->send(200, "application/json", text);
+    });
+    static std::atomic_flag bundleRunBusy = ATOMIC_FLAG_INIT;
+    server.on("^\\/api\\/pmachine\\/programs\\/([A-Za-z0-9_.-]+)\\/start$", HTTP_POST,
+        [&machine, ffs](AsyncWebServerRequest* request) {
+            const String name = request->pathArg(0);
+            if (!safeBundleName(name.c_str())) { request->send(400, "text/plain", "Invalid bundle name"); return; }
+            if (bundleRunBusy.test_and_set()) {
+                request->send(409, "text/plain", "A bundle is already executing");
+                return;
+            }
+            std::vector<uint8_t> bytes;
+            const String base = String("/pmachine/programs/") + name;
+            if (ffs == nullptr || ffs->read(base + "/manifest.json", bytes) != FFSStatus::OK || bytes.empty()) {
+                bundleRunBusy.clear();
+                request->send(404, "text/plain", "Program bundle not found");
+                return;
+            }
+            JsonDocument manifest;
+            if (deserializeJson(manifest, bytes.data(), bytes.size()) || !manifest.is<JsonObject>()) {
+                bundleRunBusy.clear();
+                request->send(500, "text/plain", "Stored bundle manifest is invalid");
+                return;
+            }
+            const char* type = manifest["type"] | "";
+            const char* initialStoragePath = manifest["storagePath"] | "";
+            const char* initialEntry = manifest["entry"] | "";
+            const char* initialProgramMap = manifest["programMap"] | "program.map.json";
+            bool hostedProgram = false;
+            if ((strcmp(type, "resident") == 0 || strcmp(type, "transient") == 0)
+                && safeBundlePath(initialEntry) && safeBundlePath(initialProgramMap)
+                && String(initialStoragePath).startsWith(base + "/versions/")) {
+                JsonDocument hostedMap;
+                const String hostedMapPath = String(initialStoragePath) + "/" + initialProgramMap;
+                hostedProgram = deserializeDocFromPath(hostedMapPath, ffs, hostedMap)
+                    && hostedMap["hostBindingsVersion"] == 1
+                    && std::string(hostedMap["runtimeUnit"]["kind"] | "") == "service";
+            }
+            if (strcmp(type, "service") == 0 || strcmp(type, "daemon") == 0 || hostedProgram) {
+                const char* storagePath = manifest["storagePath"] | "";
+                const char* entry = manifest["entry"] | "";
+                const char* programMap = manifest["programMap"] | "program.map.json";
+                const char* serviceEntry = manifest["serviceEntry"] | "";
+                const char* serviceProgramMap = manifest["serviceProgramMap"] | "";
+                const bool daemonBundle = strcmp(type, "daemon") == 0;
+                const bool indexedService = strcmp(type, "service") == 0 || daemonBundle;
+                const uint8_t serviceIndex = indexedService ? (manifest["serviceIndex"] | 0) : 0;
+                if (!safeBundlePath(entry) || !safeBundlePath(programMap)
+                    || (indexedService && (serviceIndex < 1 || serviceIndex > pmachine::PMACHINE_SERVICE_LIMIT))
+                    || (daemonBundle
+                        && (!safeBundlePath(serviceEntry) || !safeBundlePath(serviceProgramMap)))
+                    || !String(storagePath).startsWith(base + "/versions/")) {
+                    bundleRunBusy.clear();
+                    request->send(400, "text/plain", "Invalid hosted service or daemon bundle metadata");
+                    return;
+                }
+                const String entryPath = String(storagePath) + "/" + entry;
+                const String mapPath = String(storagePath) + "/" + programMap;
+                const String serviceEntryPath = String(storagePath) + "/"
+                    + (daemonBundle ? serviceEntry : entry);
+                const String serviceMapPath = String(storagePath) + "/"
+                    + (daemonBundle ? serviceProgramMap : programMap);
+                {
+                    std::vector<uint8_t> entryBytes;
+                    if (ffs->read(entryPath, entryBytes) != FFSStatus::OK || entryBytes.empty()
+                        || sha256Hex(entryBytes) != String(manifest["sha256"] | "")) {
+                        bundleRunBusy.clear();
+                        request->send(409, "text/plain", "Bundle entry digest validation failed");
+                        return;
+                    }
+                }
+                pmachine::ServiceHost::Unit service;
+                pmachine::ServiceHost::Unit daemon;
+                std::string loadError;
+                const char* daemonEntryPath = entryPath.c_str();
+                if (!loadHostedBundleUnit(*ffs, serviceEntryPath, serviceMapPath, "service",
+                                          service, loadError)
+                    || (daemonBundle
+                        && !loadHostedBundleUnit(*ffs, String(daemonEntryPath), mapPath, "daemon",
+                                                 daemon, loadError))) {
+                    bundleRunBusy.clear();
+                    request->send(400, "text/plain", loadError.c_str());
+                    return;
+                }
+                const String collectorId = String("bundle-") + name;
+                std::string slotError;
+                if (processSlots.find(collectorId.c_str()) != nullptr) {
+                    bundleRunBusy.clear();
+                    request->send(409, "text/plain", "Hosted bundle is already active");
+                    return;
+                }
+                const pmachine::ProcessSlotKind slotKind = strcmp(type, "resident") == 0
+                    ? pmachine::ProcessSlotKind::RESIDENT
+                    : strcmp(type, "transient") == 0 ? pmachine::ProcessSlotKind::TRANSIENT
+                    : pmachine::ProcessSlotKind::SERVICE;
+                if (!processSlots.claim(collectorId.c_str(), slotKind,
+                                        serviceIndex, slotError)) {
+                    bundleRunBusy.clear();
+                    request->send(409, "text/plain", slotError.c_str());
+                    return;
+                }
+                std::string persistError;
+                if (!persistProcessSlots(ffs, processSlots, persistError)) {
+                    processSlots.release(collectorId.c_str());
+                    bundleRunBusy.clear();
+                    request->send(503, "text/plain", persistError.c_str());
+                    return;
+                }
+                std::string installError;
+                std::vector<pmachine::ServiceHost::DaemonSpec> daemons;
+                if (daemonBundle) {
+                    pmachine::ServiceHost::DaemonSpec spec;
+                    spec.unit = std::move(daemon);
+                    spec.udpPort = manifest["udpPort"] | 0;
+                    daemons.push_back(std::move(spec));
+                }
+                const bool installed = serviceHost.install(std::move(service), std::move(daemons),
+                    collectorId.c_str(), 0, 180000, 60000, installError);
+                if (!installed) {
+                    processSlots.release(collectorId.c_str());
+                    if (!persistProcessSlots(ffs, processSlots, persistError))
+                        Serial.printf("[PMACHINE] Failed to persist service bundle rollback: %s\n",
+                                      persistError.c_str());
+                    bundleRunBusy.clear();
+                    request->send(409, "text/plain", installError.c_str());
+                    return;
+                }
+                JsonDocument result;
+                result["status"] = "running";
+                result["collectorId"] = collectorId;
+                char slotName[12];
+                if (indexedService) snprintf(slotName, sizeof(slotName), "service-%02u", serviceIndex);
+                else snprintf(slotName, sizeof(slotName), "%s",
+                              slotKind == pmachine::ProcessSlotKind::RESIDENT ? "resident" : "transient");
+                result["slot"] = slotName;
+                String response;
+                serializeJson(result, response);
+                bundleRunBusy.clear();
+                request->send(201, "application/json", response);
+                return;
+            }
+            if (strcmp(type, "resident") != 0 && strcmp(type, "transient") != 0
+                && strcmp(type, "program") != 0) {
+                bundleRunBusy.clear();
+                request->send(409, "text/plain", "Daemon bundles must be installed with a hosted service bundle");
+                return;
+            }
+            const char* storagePath = manifest["storagePath"] | "";
+            const char* entry = manifest["entry"] | "";
+            const char* programMap = manifest["programMap"] | "program.map.json";
+            if (!safeBundlePath(entry) || !safeBundlePath(programMap)
+                || !String(storagePath).startsWith(base + "/versions/")) {
+                bundleRunBusy.clear();
+                request->send(500, "text/plain", "Stored bundle paths are invalid");
+                return;
+            }
+            const String entryPath = String(storagePath) + "/" + entry;
+            const String mapPath = String(storagePath) + "/" + programMap;
+            std::vector<uint8_t> entryBytes;
+            if (ffs->read(entryPath, entryBytes) != FFSStatus::OK || entryBytes.empty()
+                || sha256Hex(entryBytes) != String(manifest["sha256"] | "")) {
+                bundleRunBusy.clear();
+                request->send(409, "text/plain", "Bundle entry digest validation failed");
+                return;
+            }
+            const bool resident = strcmp(type, "resident") == 0;
+            const String slotKey = String("bundle:") + name;
+            std::string slotError;
+            if (!processSlots.claim(slotKey.c_str(),
+                    resident ? pmachine::ProcessSlotKind::RESIDENT : pmachine::ProcessSlotKind::TRANSIENT,
+                    0, slotError)) {
+                bundleRunBusy.clear();
+                request->send(409, "text/plain", slotError.c_str());
+                return;
+            }
+            std::string persistError;
+            if (!persistProcessSlots(ffs, processSlots, persistError)) {
+                processSlots.release(slotKey.c_str());
+                bundleRunBusy.clear();
+                request->send(503, "text/plain", persistError.c_str());
+                return;
+            }
+            PMachineFileExecutionResult execution;
+            {
+                ForegroundBundleExecution running(name);
+                execution = executePMachineFile(machine, ffs, entryPath, mapPath, "", "", 16384);
+            }
+            processSlots.release(slotKey.c_str());
+            if (!persistProcessSlots(ffs, processSlots, persistError))
+                Serial.printf("[PMACHINE] Failed to persist completed bundle slot: %s\n", persistError.c_str());
+            bundleRunBusy.clear();
+            request->send(execution.statusCode, "application/json", execution.body);
+        });
+    if (ffs != nullptr) {
+        std::vector<uint8_t> savedState;
+        if (ffs->read("/pmachine/process-slots.json", savedState) == FFSStatus::OK
+            && !savedState.empty()) {
+            std::string restoreError;
+            if (!processSlots.restore(
+                    std::string(savedState.begin(), savedState.end()), restoreError)) {
+                Serial.printf("[PMACHINE] Ignoring invalid process slot state: %s\n",
+                              restoreError.c_str());
+            }
+        }
+    }
+    server.on("/pmachine/process-slots", HTTP_GET, [](AsyncWebServerRequest* request) {
+        JsonDocument out;
+        JsonArray slots = out["slots"].to<JsonArray>();
+        for (uint8_t index = 0; index < processSlots.size(); ++index) {
+            const auto& slot = processSlots.at(index);
+            JsonObject item = slots.add<JsonObject>();
+            if (slot.kind == pmachine::ProcessSlotKind::RESIDENT) item["slot"] = "resident";
+            else if (slot.kind == pmachine::ProcessSlotKind::TRANSIENT) item["slot"] = "transient";
+            else {
+                char name[12];
+                snprintf(name, sizeof(name), "service-%02u", slot.serviceIndex);
+                item["slot"] = name;
+            }
+            item["occupied"] = slot.occupied;
+            if (slot.occupied) item["key"] = slot.key;
+        }
+        String text;
+        serializeJson(out, text);
+        request->send(200, "application/json", text);
+    });
+    server.on("/pmachine/process-slots/claim", HTTP_POST, [ffs](AsyncWebServerRequest* request) {
+        String key, kind, serviceIndexText;
+        if (!getRequestParam(request, "key", key) || !getRequestParam(request, "kind", kind)) {
+            request->send(400, "text/plain", "key and kind are required");
+            return;
+        }
+        pmachine::ProcessSlotKind slotKind;
+        uint8_t serviceIndex = 0;
+        if (kind == "resident") slotKind = pmachine::ProcessSlotKind::RESIDENT;
+        else if (kind == "transient") slotKind = pmachine::ProcessSlotKind::TRANSIENT;
+        else if (kind == "service" && getRequestParam(request, "serviceIndex", serviceIndexText)
+                 && serviceIndexText.length() <= 2) {
+            const int parsed = serviceIndexText.toInt();
+            if (parsed >= 1 && parsed <= pmachine::PMACHINE_SERVICE_LIMIT) serviceIndex = static_cast<uint8_t>(parsed);
+            slotKind = pmachine::ProcessSlotKind::SERVICE;
+        } else {
+            request->send(400, "text/plain", "kind must be resident, transient, or service with serviceIndex 1..15");
+            return;
+        }
+        std::string error;
+        if (!processSlots.claim(key.c_str(), slotKind, serviceIndex, error)) {
+            request->send(409, "text/plain", error.c_str());
+            return;
+        }
+        std::string persistError;
+        if (!persistProcessSlots(ffs, processSlots, persistError)) {
+            processSlots.release(key.c_str());
+            request->send(503, "text/plain", persistError.c_str());
+            return;
+        }
+        request->send(201, "application/json", "{\"ok\":true,\"claimed\":true}");
+    });
+    server.on("/pmachine/process-slots/release", HTTP_POST, [ffs](AsyncWebServerRequest* request) {
+        String key;
+        if (!getRequestParam(request, "key", key)) {
+            request->send(400, "text/plain", "key is required");
+            return;
+        }
+        if (!processSlots.release(key.c_str())) {
+            request->send(404, "text/plain", "process slot key is not active");
+            return;
+        }
+        std::string persistError;
+        if (!persistProcessSlots(ffs, processSlots, persistError)) {
+            request->send(503, "text/plain", persistError.c_str());
+            return;
+        }
+        request->send(200, "application/json", "{\"ok\":true,\"released\":true}");
+    });
+    server.addHandler(new AssemblerishInstallWebHandler("/pmachine/assemblerish",
         [](AsyncWebServerRequest* request, JsonDocument& body) {
             if (!body["pcode"].is<const char*>() || !body["programMapText"].is<const char*>() ||
                 !body["allowedPins"].is<JsonArrayConst>()) {
@@ -3631,8 +4334,85 @@ void registerPMachineRoutes(
         request->send(200, "application/json", "{\"ok\":true,\"installed\":false}");
     });
     std::string storageError;
-    if (!serviceHost.reserveExecutionStorage(storageError))
+    if (!serviceHost.reserveExecutionStorage(storageError)) {
         Serial.printf("[PMACHINE] Execution storage unavailable: %s\n", storageError.c_str());
+    } else if (ffs != nullptr) {
+        for (uint8_t index = 0; index < processSlots.size(); ++index) {
+            const auto& slot = processSlots.at(index);
+            if (!slot.occupied || slot.key.rfind("bundle-", 0) != 0
+                || (slot.kind != pmachine::ProcessSlotKind::SERVICE
+                    && slot.kind != pmachine::ProcessSlotKind::RESIDENT
+                    && slot.kind != pmachine::ProcessSlotKind::TRANSIENT)) continue;
+            const String name = slot.key.substr(7).c_str();
+            if (!safeBundleName(name.c_str())) continue;
+            const String base = String("/pmachine/programs/") + name;
+            std::vector<uint8_t> manifestBytes;
+            if (ffs->read(base + "/manifest.json", manifestBytes) != FFSStatus::OK
+                || manifestBytes.empty()) continue;
+            JsonDocument manifest;
+            if (deserializeJson(manifest, manifestBytes.data(), manifestBytes.size())
+                || !manifest.is<JsonObject>()) continue;
+            const char* type = manifest["type"] | "";
+            const bool daemonBundle = strcmp(type, "daemon") == 0;
+            const bool indexedService = strcmp(type, "service") == 0 || daemonBundle;
+            const bool slotMatches = slot.kind == pmachine::ProcessSlotKind::SERVICE
+                ? indexedService
+                : slot.kind == pmachine::ProcessSlotKind::RESIDENT
+                    ? strcmp(type, "resident") == 0 : strcmp(type, "transient") == 0;
+            const char* storagePath = manifest["storagePath"] | "";
+            const char* entry = manifest["entry"] | "";
+            const char* programMap = manifest["programMap"] | "program.map.json";
+            const char* serviceEntry = manifest["serviceEntry"] | "";
+            const char* serviceProgramMap = manifest["serviceProgramMap"] | "";
+            const uint8_t serviceIndex = manifest["serviceIndex"] | 0;
+            if (!slotMatches || !safeBundlePath(entry) || !safeBundlePath(programMap)
+                || (indexedService && (serviceIndex != slot.serviceIndex
+                    || serviceIndex < 1 || serviceIndex > pmachine::PMACHINE_SERVICE_LIMIT))
+                || (daemonBundle
+                    && (!safeBundlePath(serviceEntry) || !safeBundlePath(serviceProgramMap)))
+                || !String(storagePath).startsWith(base + "/versions/")) {
+                Serial.printf("[PMACHINE] Recovery metadata mismatch for %s\n", name.c_str());
+                continue;
+            }
+            const String entryPath = String(storagePath) + "/" + entry;
+            const String mapPath = String(storagePath) + "/" + programMap;
+            const String servicePath = String(storagePath) + "/"
+                + (daemonBundle ? serviceEntry : entry);
+            const String serviceMapPath = String(storagePath) + "/"
+                + (daemonBundle ? serviceProgramMap : programMap);
+            {
+                std::vector<uint8_t> entryBytes;
+                if (ffs->read(entryPath, entryBytes) != FFSStatus::OK || entryBytes.empty()
+                    || sha256Hex(entryBytes) != String(manifest["sha256"] | "")) {
+                    Serial.printf("[PMACHINE] Recovery digest mismatch for %s\n", name.c_str());
+                    continue;
+                }
+            }
+            pmachine::ServiceHost::Unit service;
+            pmachine::ServiceHost::Unit daemon;
+            std::string recoveryError;
+            if (!loadHostedBundleUnit(*ffs, servicePath, serviceMapPath, "service",
+                                      service, recoveryError)
+                || (daemonBundle && !loadHostedBundleUnit(*ffs, entryPath, mapPath, "daemon",
+                                                           daemon, recoveryError))) {
+                Serial.printf("[PMACHINE] Recovery load failed for %s: %s\n",
+                              name.c_str(), recoveryError.c_str());
+                continue;
+            }
+            std::vector<pmachine::ServiceHost::DaemonSpec> daemons;
+            if (daemonBundle) {
+                pmachine::ServiceHost::DaemonSpec spec;
+                spec.unit = std::move(daemon);
+                spec.udpPort = manifest["udpPort"] | 0;
+                daemons.push_back(std::move(spec));
+            }
+            if (!serviceHost.install(std::move(service), std::move(daemons), slot.key,
+                                     0, 180000, 60000, recoveryError)) {
+                Serial.printf("[PMACHINE] Recovery start failed for %s: %s\n",
+                              name.c_str(), recoveryError.c_str());
+            }
+        }
+    }
     server.on("/pmachine/service_host/install", HTTP_POST, [ffs](AsyncWebServerRequest* request) {
         String serviceFile, serviceMap, daemonFile, daemonMap, collectorId, udpPort = "4210", daemonsJson;
         String ttl = "180000", heartbeat = "60000";
@@ -3734,7 +4514,7 @@ void registerPMachineRoutes(
             if (daemonsJson.length() > 1024 || deserializeJson(daemonList, daemonsJson)
                 || !daemonList.is<JsonArray>() || daemonList.size() < 1
                 || daemonList.size() > pmachine::ServiceHost::DAEMON_LIMIT) {
-                completion->finish(400, "text/plain", "Invalid daemons list (1..3 entries)"); return;
+                completion->finish(400, "text/plain", "Invalid daemons list (1..16 entries)"); return;
             }
             for (JsonObjectConst entry : daemonList.as<JsonArrayConst>()) {
                 const uint32_t daemonPort = entry["udpPort"] | 0u;
@@ -3858,9 +4638,37 @@ void registerPMachineRoutes(
         std::string installError;
         JsonDocument networkPeers;
         if (hasPeers
-            && (peerJson.length() > 1024 || deserializeJson(networkPeers, peerJson)
+            && (peerJson.length() > 16384 || deserializeJson(networkPeers, peerJson)
                 || !networkPeers.is<JsonArray>())) {
             completion->finish(400, "text/plain", "Invalid network peer allowlist"); return;
+        }
+        uint8_t claimedServiceIndex = 0;
+        std::string slotError;
+        const pmachine::ProcessSlot* existingSlot = processSlots.find(collectorId.c_str());
+        if (existingSlot != nullptr) {
+            if (existingSlot->kind == pmachine::ProcessSlotKind::SERVICE) {
+                claimedServiceIndex = existingSlot->serviceIndex;
+            } else {
+                completion->finish(409, "text/plain", "Collector already owns a non-service process slot"); return;
+            }
+        } else {
+            for (uint8_t index = 1; index <= pmachine::PMACHINE_SERVICE_LIMIT; ++index) {
+                if (processSlots.claim(collectorId.c_str(), pmachine::ProcessSlotKind::SERVICE,
+                                       index, slotError)) {
+                    claimedServiceIndex = index;
+                    break;
+                }
+            }
+        }
+        if (claimedServiceIndex == 0) {
+            completion->finish(409, "text/plain", "No service slot is available"); return;
+        }
+        if (existingSlot == nullptr) {
+            std::string persistError;
+            if (!persistProcessSlots(ffs, processSlots, persistError)) {
+                processSlots.release(collectorId.c_str());
+                completion->finish(503, "text/plain", persistError.c_str()); return;
+            }
         }
         const bool installed = sharedDaemons
             ? serviceHost.install(std::move(service), std::move(daemonSpecs), collectorId.c_str(),
@@ -3870,12 +4678,23 @@ void registerPMachineRoutes(
                                   portValue, ttlValue, heartbeatValue, installError,
                                   networkPeers.as<JsonVariantConst>(), std::move(lifecycle));
         if (!installed) {
+            if (existingSlot == nullptr) {
+                processSlots.release(collectorId.c_str());
+                std::string persistError;
+                if (!persistProcessSlots(ffs, processSlots, persistError))
+                    Serial.printf("[PMACHINE] Failed to persist released service slot: %s\n",
+                                  persistError.c_str());
+            }
             Serial.printf("[SERVICE-HOST] Install failed: %s\n", installError.c_str());
             const int code = installError.find("Duplicate") != std::string::npos
                 || installError.find("capacity exceeded") != std::string::npos ? 409 : 503;
             completion->finish(code, "text/plain", installError.c_str()); return;
         }
-        completion->finish(200, "application/json", "{\"running\":true,\"hostBindingsVersion\":1}");
+        char responseBody[96];
+        snprintf(responseBody, sizeof(responseBody),
+                 "{\"running\":true,\"hostBindingsVersion\":1,\"serviceIndex\":%u}",
+                 claimedServiceIndex);
+        completion->finish(200, "application/json", responseBody);
             } catch (const std::bad_alloc&) {
                 Serial.println("[SERVICE-HOST] Installation allocation failed");
                 completion->finish(503, "text/plain", "Hosted installation allocation failed");
@@ -3923,11 +4742,28 @@ void registerPMachineRoutes(
         }
         request->send(response);
     });
-    server.on("/pmachine/service_host/stop", HTTP_POST, [](AsyncWebServerRequest* request) {
+    server.on("/pmachine/service_host/stop", HTTP_POST, [ffs](AsyncWebServerRequest* request) {
         std::string error;
         String id;
         getRequestParam(request, "collectorId", id);
         if (!serviceHost.stop(error, id.c_str())) { request->send(503, "text/plain", error.c_str()); return; }
+        bool released = false;
+        if (!id.isEmpty()) {
+            released = processSlots.release(id.c_str());
+        } else {
+            for (uint8_t index = 0; index < processSlots.size(); ++index) {
+                const auto& slot = processSlots.at(index);
+                if (slot.occupied && (slot.kind == pmachine::ProcessSlotKind::SERVICE
+                    || slot.key.rfind("bundle-", 0) == 0))
+                    released = processSlots.release(slot.key) || released;
+            }
+        }
+        if (released) {
+            std::string persistError;
+            if (!persistProcessSlots(ffs, processSlots, persistError))
+                Serial.printf("[PMACHINE] Failed to persist released service slot: %s\n",
+                              persistError.c_str());
+        }
         request->send(200, "application/json", id.isEmpty() ? "{\"running\":false}" : "{\"stopped\":true}");
     });
     auto serveHosted = [](AsyncWebServerRequest* request, const std::string& body) {
@@ -3991,7 +4827,7 @@ void registerPMachineRoutes(
         request->send(deferred);
         event->submitted.store(true);
     };
-    for (const char* path : {"/api/discovery/snapshot", "/health", "/api/kasa/status", "/api/kasa/discover", "/api/kasa/devices"})
+    for (const char* path : {"/api/discovery/snapshot", "/health"})
         server.on(path, HTTP_GET, [serveHosted](AsyncWebServerRequest* request) { serveHosted(request, ""); });
     auto* announcementHandler = new AsyncCallbackJsonWebHandler("/api/pmachine/announce",
         [serveHosted](AsyncWebServerRequest* request, JsonVariant& json) {
@@ -4002,15 +4838,6 @@ void registerPMachineRoutes(
     announcementHandler->setMethod(HTTP_POST);
     announcementHandler->setMaxContentLength(2048);
     server.addHandler(announcementHandler);
-    auto* kasaActionHandler = new AsyncCallbackJsonWebHandler("/api/kasa/action",
-        [serveHosted](AsyncWebServerRequest* request, JsonVariant& json) {
-            std::string body;
-            serializeJson(json, body);
-            serveHosted(request, body);
-        });
-    kasaActionHandler->setMethod(HTTP_POST);
-    kasaActionHandler->setMaxContentLength(2048);
-    server.addHandler(kasaActionHandler);
     server.addHandler(new HostedServiceWebHandler(serviceHost, serveHosted));
 
     auto* dagWorkerHandler = new AsyncCallbackJsonWebHandler("/pmachine/dag/execute",

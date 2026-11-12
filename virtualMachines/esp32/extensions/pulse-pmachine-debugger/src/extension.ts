@@ -1426,7 +1426,21 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
         ? this.state?.frames?.[reference - 100]?.locals
         : this.state?.locals;
     const fields = this.runtime?.artifact?.programMap?.fields || {};
-    return Object.entries(values || {})
+    return this.debugVariables(values, fields);
+  }
+
+  private debugVariables(values: Record<string, unknown> | undefined, fields: Record<string, any>): DebugProtocol.Variable[] {
+    const entries = new Map(Object.entries(values || {}));
+    for (const procedure of Object.values(this.runtime?.artifact?.programMap?.procedures || {}) as any[]) {
+      for (const variable of procedure?.variables || []) {
+        if (typeof variable?.name === 'string' && typeof variable?.slot === 'string'
+          && Object.prototype.hasOwnProperty.call(values || {}, variable.slot)
+          && !entries.has(variable.name)) {
+          entries.set(variable.name, (values || {})[variable.slot]);
+        }
+      }
+    }
+    return [...entries]
       .filter(([name]) => this.runtime?.language !== 'cobolish' || !name.startsWith('__'))
       .map(([name, value]) => ({ name, value: debugValue(value, fields[name]), variablesReference: 0 }));
   }
@@ -1446,7 +1460,15 @@ class PulsePmachineAdapter implements vscode.DebugAdapter {
 
   private evaluate(request: DebugProtocol.Request): void {
     const name = String(request.arguments?.expression || '').trim();
-    const values = { ...(this.state?.globals || {}), ...(this.state?.locals || {}) };
+    const values = { ...(this.state?.globals || {}), ...(this.state?.locals || {}) } as Record<string, unknown>;
+    for (const procedure of Object.values(this.runtime?.artifact?.programMap?.procedures || {}) as any[]) {
+      for (const variable of procedure?.variables || []) {
+        if (typeof variable?.name === 'string' && typeof variable?.slot === 'string'
+          && Object.prototype.hasOwnProperty.call(values, variable.slot)) {
+          values[variable.name] = values[variable.slot];
+        }
+      }
+    }
     if (!Object.prototype.hasOwnProperty.call(values, name)) {
       this.respond(request, false, undefined, `Unknown PMachine variable '${name}'.`);
       return;
@@ -1992,7 +2014,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('pulse-pmachine.refreshLibrarian', () => librarian.refresh()),
     vscode.commands.registerCommand('pulse-pmachine.openLibrarianSchema', (item?: Parameters<typeof openLibrarianSchema>[0]) => openLibrarianSchema(item, librarian)),
     vscode.commands.registerCommand('pulse-pmachine.showDataLibrarian', () =>
-      vscode.commands.executeCommand('pulse-pmachine.dataLibrarian.focus')),
+      vscode.commands.executeCommand('pulseCatalogStudio.dataLibrarian.focus')),
     vscode.workspace.onDidGrantWorkspaceTrust(() => { librarian.refresh(); esp32Librarian.refresh(); }),
     vscode.commands.registerCommand('pulse-pmachine.refreshServices', () => services.refresh()),
     vscode.commands.registerCommand('pulse-pmachine.refreshServers', () => servers.refresh()),

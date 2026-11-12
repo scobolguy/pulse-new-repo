@@ -1080,6 +1080,9 @@ function assignVar(frame, name, value) {
 }
 
 async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queueTypesByName = new Map(), isoTypeIds = new Set(), inputQueue, sourceMessage, runtimeContext = {}, debugHooks = {} }) {
+  if (runtimeContext.onStdoutLine !== undefined && typeof runtimeContext.onStdoutLine !== 'function') {
+    throw new TypeError('onStdoutLine must be a function');
+  }
   if (runtimeContext.memoryManager !== undefined && runtimeContext.memoryLimitBytes !== undefined) {
     throw new TypeError('Configure memoryManager or memoryLimitBytes, not both');
   }
@@ -1115,6 +1118,10 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
   const deliveries = [];
   const state = {};
   const stdout = [];
+  const emitStdout = line => {
+    stdout.push(line);
+    if (runtimeContext.onStdoutLine) runtimeContext.onStdoutLine(line);
+  };
   const fortranState = createFortranState();
   let currentLine = '';
 
@@ -1281,7 +1288,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
         const args = argc ? stack.splice(stack.length - argc, argc) : [];
         const values = args.map(value => isReal(value)
           ? { real: value.v, ...(value instanceof PDouble ? { double: true } : {}) } : value);
-        const io = { emit: record => stdout.push(record), files: textFiles, stdin: consoleInput.lines.join('\n') };
+        const io = { emit: emitStdout, files: textFiles, stdin: consoleInput.lines.join('\n') };
         const result = isFortranIoIntrinsic(name)
           ? await waitFor(name, () => executeFortranIoIntrinsic(name, values, fortranState, io))
           : executeFortranIntrinsic(name, values, fortranState, io);
@@ -1899,7 +1906,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       continue;
     }
     if (op === 'PRINT_NL') {
-      stdout.push(currentLine);
+      emitStdout(currentLine);
       currentLine = '';
       pc += 1;
       continue;
@@ -2526,7 +2533,9 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
   }
 
   reconcileObjects();
-  if (currentLine.length > 0) stdout.push(currentLine);
+  if (currentLine.length > 0) {
+    emitStdout(currentLine);
+  }
   return { deliveries, state, stdout, globals: exportGlobals(globalFrame.vars, records, sets), stepCount: steps, stepLimitHit, orchestration: state.__orchestration || null, response: state.__response ?? null, error: state.__orch_error || null,
     managedObjects: objects.stats,
     ...(memory ? { memory: memory.diagnostics() } : {}) };

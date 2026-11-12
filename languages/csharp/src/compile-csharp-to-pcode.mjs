@@ -5,6 +5,7 @@ import { parseCsharp } from './parser.mjs';
 import { compileScalarToPcode } from '../../dotnet/compile-scalar-to-pcode.mjs';
 import { prepareScalarImports, linkScalarLibraries } from '../../dotnet/scalar-library.mjs';
 import { createDotnetServiceContract } from '../../dotnet/service-contract.mjs';
+import { PULSE_NETWORK_IMPORTS } from '../../dotnet/pulse-network-library.mjs';
 
 export function compileCsharpToPcode(source, { fileName = 'program.cs', libraries = [], target = 'js' } = {}) {
   if (typeof source !== 'string') throw new TypeError('C# source must be a string');
@@ -40,7 +41,7 @@ export function compileCsharpToPcode(source, { fileName = 'program.cs', librarie
       contract: createDotnetServiceContract({ id: serviceClass.name, endpoints: serviceEndpoints })
     };
   }
-  const imports = prepareScalarImports(libraries, 'csharp', target);
+  const imports = [...PULSE_NETWORK_IMPORTS, ...prepareScalarImports(libraries, 'csharp', target)];
   const artifact = linkScalarLibraries(compileScalarToPcode(program, source, {
     fileName, sourceLanguage: 'csharp', imports, target, service
   }), libraries);

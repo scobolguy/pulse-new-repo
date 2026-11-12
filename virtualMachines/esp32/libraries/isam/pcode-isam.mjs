@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { executeProgram, parsePcode, parseProgramMapMappings } from '../../pmachines/javascript/src/runtime.mjs';
 import { createJsonCollectionBindings } from '../../pmachines/javascript/src/json-collection-bindings.mjs';
 import { createJsonObjectBindings } from '../../pmachines/javascript/src/json-object-bindings.mjs';
@@ -87,7 +88,7 @@ export function loadIsamPcode() {
 }
 
 // State is opaque to the adapter; all file decisions and mutations execute in P-code.
-export function createPcodeIsamBindings(filesystem) {
+export function createPcodeIsamBindings(filesystem, { audit = false } = {}) {
   for (const name of ['host.fs_exists', 'host.fs_read_text', 'host.fs_write_text']) {
     if (typeof filesystem?.[name] !== 'function') throw new Error(`ISAM storage adapter requires ${name}`);
   }
@@ -96,6 +97,8 @@ export function createPcodeIsamBindings(filesystem) {
   const owner = Symbol('pcode-isam-bindings');
   const ownedFiles = new Set();
   let disposed = false;
+  if (typeof audit !== 'boolean' && typeof audit !== 'function')
+    throw new Error('ISAM audit must be disabled or a callback');
 
   function dispatch(operation, request, context) {
     const work = operations.then(async () => {
@@ -103,6 +106,7 @@ export function createPcodeIsamBindings(filesystem) {
       context?.signal?.throwIfAborted();
       let identity = null;
       let fileMetadata = null;
+      let handleInfo = null;
       if (operation === 'open') {
         validateOpen(request.root, request.path, request.keyName);
         fileMetadata = decodeCobolFileMetadata(request.keyName);
@@ -110,6 +114,7 @@ export function createPcodeIsamBindings(filesystem) {
         identity = pathIdentity(request.root, request.path);
       } else {
         const handle = state.handles.find(item => item.id === request.handle);
+        handleInfo = handle;
         if (handle) identity = pathIdentity(handle.root, handle.path);
         if (operation === 'read' || operation === 'read_alt' || operation === 'start') {
           validateText(request.key, 'key', MAX_KEY_BYTES);
@@ -214,6 +219,23 @@ export function createPcodeIsamBindings(filesystem) {
         statuses.set(handle, response.status);
       }
       if (writeError) throw writeError;
+      if (audit && ['write', 'rewrite', 'delete'].includes(operation) && response.status === '00') {
+        const record = operation === 'delete' ? '' : request.record;
+        const event = {
+          version: 1,
+          operation,
+          root: handleInfo?.root ?? null,
+          path: handleInfo?.path ?? null,
+          handle: request.handle,
+          key: request.key,
+          recordSha256: createHash('sha256').update(record ?? '').digest('hex'),
+          status: response.status,
+          processId: context?.processId ?? null,
+          transactionId: context?.transactionId ?? null,
+          timestamp: new Date().toISOString(),
+        };
+        if (typeof audit === 'function') await audit(event);
+      }
       return response;
     });
     operations = work.then(() => undefined, () => undefined);

@@ -14,19 +14,6 @@ begin
   return '{"status":"ok"}'
 end;
 
-function snapshot(): string;
-var result: string;
-    cursor: string;
-begin
-  cursor := host.event_query('cursor');
-  host.table_expire('nodes');
-  result := '{"protocolVersion":1}';
-  result := host.json_set(result, 'collectorId', host.collector_id());
-  result := host.json_set(result, 'bootId', host.boot_id());
-  result := host.json_set(result, 'sequence', host.next_sequence());
-  return host.json_merge(result, host.table_snapshot('nodes', cursor, 5))
-end;
-
 post '/api/pmachine/announce';
 begin
   return ingestNode(host.event_body(), host.event_peer())
@@ -34,21 +21,12 @@ end
 
 post '/events/udp';
 begin
-  if (host.json_text(host.event_body(), 'kind') = 'nodeBeacon') or
-     (host.json_text(host.event_body(), 'kind') = 'machineAvailability') then
-  begin
-    ingestNode(host.event_body(), host.event_peer());
-    host.udp_reply(host.json_set(host.json_set('{"kind":"nodeBeaconAck","requestDetails":false}',
-      'collectorId', host.collector_id()), 'nodeId',
-      host.json_text(host.announcement(host.event_body(), host.event_peer()), 'nodeId')));
-    return '{"status":"ok"}'
-  end;
   return '{"status":"ignored"}'
 end
 
 get '/api/discovery/snapshot';
 begin
-  return snapshot()
+  return host.table_snapshot('nodes', host.event_query('cursor'), 5)
 end
 
 get '/api/devices/snapshot';

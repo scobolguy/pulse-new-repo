@@ -107,12 +107,13 @@ a named service to unregister it, or a hosted context/daemon to stop its
 containing hosted context. Each action is separately confirmed; stopping a
 context can discard its transient runtime state.
 
-**Network (Distributed Cache)** is a separate sibling branch. It reads the
-distributed device cache's revision-fenced `/api/devices` pages, displaying
+**Network** shows discovered nodes and devices from the distributed cache.
+**Network (Distributed Cache)** remains a separate sibling containing only the
+cached devices. Both views read revision-fenced `/api/devices` pages and display
 `device.name` and `device.address`. No confidence, provisional, or source-current
 filter is applied. Incomplete source coverage is shown explicitly without
 hiding available cached devices. API/validation failures produce an error row
-with details in its tooltip; the view never substitutes legacy discovery data.
+with details in its tooltip; Network still shows nodes when the cache is unavailable.
 
 Configure `pulse.catalogStudio.distributedCacheApiBase` to change the cache
 origin (default `http://127.0.0.1:4310`). Use **Pulse: Refresh Infrastructure

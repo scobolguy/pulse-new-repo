@@ -3,6 +3,10 @@
     {
       "name": "nodes",
       "capacity": 255
+    },
+    {
+      "name": "networkDevices",
+      "capacity": 2
     }
   ]
 }

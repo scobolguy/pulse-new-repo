@@ -1,5 +1,6 @@
 import net from 'node:net';
 import dgram from 'node:dgram';
+import os from 'node:os';
 import { createDecipheriv } from 'node:crypto';
 
 const LIMIT = 4096;
@@ -17,7 +18,7 @@ function bytes(hex) {
 }
 
 export function createNetworkBindings(networkPeers = []) {
-  if (!Array.isArray(networkPeers) || networkPeers.length > 8) throw new Error('Invalid network peer allowlist');
+  if (!Array.isArray(networkPeers) || networkPeers.length > 256) throw new Error('Invalid network peer allowlist');
   const peers = new Set(networkPeers.map(peer => {
     if (net.isIP(peer?.ip) !== 4) throw new Error('Network peers require literal IPv4 addresses');
     return `${peer.ip}:${boundedInteger(peer.port, 1, 65535, 'peer port')}`;
@@ -29,6 +30,141 @@ export function createNetworkBindings(networkPeers = []) {
     const payload = bytes(hex);
     if (!payload.length) throw new Error('Empty network request');
     return payload;
+  }
+  function localIpv4Subnets() {
+    const subnets = [];
+    for (const [name, addresses] of Object.entries(os.networkInterfaces())) {
+      for (const entry of addresses || []) {
+        if (entry.family !== 'IPv4' && entry.family !== 4 || entry.internal || !entry.netmask) continue;
+        const octets = value => value.split('.').map(part => Number(part));
+        const address = octets(entry.address), mask = octets(entry.netmask);
+        if (address.length !== 4 || mask.length !== 4 ||
+            [...address, ...mask].some(part => !Number.isInteger(part) || part < 0 || part > 255)) {
+          continue;
+        }
+        const ip = address.reduce((value, part) => (value << 8) | part, 0) >>> 0;
+        const netmask = mask.reduce((value, part) => (value << 8) | part, 0) >>> 0;
+        const network = ip & netmask, broadcast = (network | (~netmask >>> 0)) >>> 0;
+        const prefixLength = netmask.toString(2).split('1').length - 1;
+        const dotted = value => [24, 16, 8, 0].map(shift => (value >>> shift) & 255).join('.');
+        subnets.push({
+          interface: name,
+          address: entry.address,
+          netmask: entry.netmask,
+          prefixLength,
+          network: dotted(network),
+          broadcast: dotted(broadcast)
+        });
+      }
+    }
+    return JSON.stringify(subnets);
+  }
+  function discoverySubnets() {
+    return JSON.parse(localIpv4Subnets()).filter(subnet =>
+      subnet.prefixLength >= 16 && subnet.prefixLength <= 30 &&
+      !/virtual|vmware|virtualbox|hyper-v|default switch/i.test(subnet.interface));
+  }
+  const discoveryAddresses = subnet => {
+    const toNumber = value => value.split('.').reduce((result, part) => (result << 8) | Number(part), 0) >>> 0;
+    const network = toNumber(subnet.network), broadcast = toNumber(subnet.broadcast);
+    if (broadcast - network > 1024) throw new Error('Discovery subnet exceeds the 1024-address scan limit');
+    return Array.from({ length: Math.max(0, broadcast - network - 1) },
+      (_, index) => [24, 16, 8, 0].map(shift => ((network + index + 1) >>> shift) & 255).join('.'));
+  };
+  function kasaProbe(ip, timeoutMs = 150) {
+    return new Promise(resolve => {
+      const socket = dgram.createSocket('udp4');
+      const request = Buffer.from('d0f281f88bff9af7d5ef94b6d1b4c09fec95e68fe187e8caf08bf68bf6', 'hex');
+      let done = false;
+      const finish = message => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        socket.close();
+        resolve(message ? { kind: 'kasa', address: ip, port: 9999, responseHex: message.toString('hex') } : null);
+      };
+      const timer = setTimeout(() => finish(null), timeoutMs);
+      socket.on('error', () => finish(null));
+      socket.on('message', message => finish(message));
+      socket.send(request, 9999, ip, error => { if (error) finish(null); });
+    });
+  }
+  async function kasaDiscover() {
+    const devices = [];
+    for (const subnet of discoverySubnets()) {
+      const addresses = discoveryAddresses(subnet);
+      for (let index = 0; index < addresses.length; index += 24) {
+        const results = await Promise.all(addresses.slice(index, index + 24).map(address => kasaProbe(address)));
+        devices.push(...results.filter(Boolean));
+      }
+    }
+    return JSON.stringify(devices);
+  }
+  function cameraDiscover() {
+    const probe = Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<e:Envelope xmlns:e="http://www.w3.org/2003/05/soap-envelope"
+ xmlns:w="http://schemas.xmlsoap.org/ws/2004/08/addressing"
+ xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery"
+ xmlns:dn="http://www.onvif.org/ver10/network/wsdl">
+<e:Header><w:MessageID>uuid:${Date.now()}-${Math.random()}</w:MessageID>
+<w:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</w:To>
+<w:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</w:Action></e:Header>
+<e:Body><d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe></e:Body></e:Envelope>`);
+    const devices = [];
+    const onvif = new Promise(resolve => {
+      const socket = dgram.createSocket('udp4');
+      const timer = setTimeout(() => {
+        socket.close();
+        resolve(JSON.stringify(devices));
+      }, 2000);
+      socket.on('error', () => {
+        clearTimeout(timer);
+        socket.close();
+        resolve(JSON.stringify(devices));
+      });
+      socket.on('message', (message, peer) => {
+        devices.push({ kind: 'camera', protocol: 'onvif', address: peer.address, port: peer.port || 3702,
+          response: message.toString('utf8').slice(0, 2048) });
+      });
+      socket.bind(0, discoverySubnets()[0]?.address || '0.0.0.0', () => {
+        socket.addMembership('239.255.255.250');
+        socket.send(probe, 3702, '239.255.255.250');
+      });
+    });
+    const rtsp = async () => {
+      const results = [];
+      for (const subnet of discoverySubnets()) {
+        const addresses = discoveryAddresses(subnet);
+        for (let index = 0; index < addresses.length; index += 24) {
+          await Promise.all(addresses.slice(index, index + 24).flatMap(address =>
+            [554, 2020].map(port => new Promise(resolve => {
+              const socket = net.createConnection({ host: address, port });
+              let response = '', settled = false;
+              const finish = () => {
+                if (settled) return;
+                settled = true;
+                socket.destroy();
+                if (/^RTSP\/1\.[01]/m.test(response)) {
+                  devices.push({ kind: 'camera', protocol: 'rtsp', address, port });
+                }
+                resolve();
+              };
+              socket.setTimeout(250, finish);
+              socket.once('error', finish);
+              socket.once('connect', () => socket.write(
+                `OPTIONS rtsp://${address}:${port}/ RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: PulseDiscovery\r\n\r\n`
+              ));
+              socket.on('data', chunk => { response += chunk.toString('ascii'); finish(); });
+            }))
+          ));
+        }
+      }
+      return results;
+    };
+    return Promise.race([
+      Promise.all([onvif, rtsp()]).then(() => JSON.stringify(devices)),
+      new Promise(resolve => setTimeout(() => resolve(JSON.stringify(devices)), 15000))
+    ]);
   }
   async function filesystemPost(ip, port, route, body, timeout, { signal }) {
     if (!peers.has(`${ip}:${port}`)) throw new Error('Network peer is not allowed');
@@ -173,5 +309,10 @@ export function createNetworkBindings(networkPeers = []) {
         });
       });
     }
+    ,
+    'host.local_ipv4_subnets': localIpv4Subnets
+    ,
+    'host.kasa_discover': kasaDiscover,
+    'host.camera_discover': cameraDiscover
   };
 }

@@ -73,7 +73,11 @@ export function analyze(program, { imports = [], checkedArithmetic = false, serv
       params: item.parameterTypes.map(type => ({ type: { name: type } })), returnType: { name: item.returnType }
     });
   }
-  for (const method of methods.values()) {
+  const globalVariables = new Map();
+  // The synthetic globals initializer is analyzed first so its declarations
+  // are visible as module globals to every other method body.
+  const orderedMethods = [...methods.values()].sort((a, b) => (b.globalsInit ? 1 : 0) - (a.globalsInit ? 1 : 0));
+  for (const method of orderedMethods) {
     if (method.external) continue;
     const parameters = new Set();
     for (const token of method.typeParams) {
@@ -106,7 +110,18 @@ export function analyze(program, { imports = [], checkedArithmetic = false, serv
     function lookup(node, state, read = true) {
       if (node.kind !== 'name') fail(node.token, 'Assignment requires a local variable');
       const variable = [...scopes].reverse().map(scope => scope.names.get(node.name)).find(Boolean);
-      if (!variable) fail(node.token, `Unknown local '${node.name}'`);
+      if (!variable) {
+        // Module globals run their initializers before the entry point, so
+        // they are always assigned by the time any method body executes.
+        const global = globalVariables.get(node.name);
+        if (global) {
+          node.variable = global;
+          node.valueType = global.type;
+          node.nullable = global.nullable === true;
+          return global;
+        }
+        fail(node.token, `Unknown local '${node.name}'`);
+      }
       if (read && state.reachable && !state.assigned.has(variable.slot)) fail(node.token, `Use of unassigned local '${node.name}'`);
       node.variable = variable;
       node.valueType = variable.type;
@@ -264,11 +279,13 @@ export function analyze(program, { imports = [], checkedArithmetic = false, serv
           break;
         case 'property': {
           const receiverType = expression(node.receiver, state, mode);
-          if (receiverType === 'int-array' && node.name === 'size') {
+          if (receiverType?.endsWith('-array') && node.name === 'size') {
             node.arraySize = true;
             type = 'int';
             break;
           }
+          if (node.forSequence)
+            fail(node.token, 'For loops must iterate over a numeric range or an array');
           if (!classNames.has(receiverType)) fail(node.token, `${node.name} requires a function call`);
           const getterName = `${receiverType}.get${node.name[0].toUpperCase()}${node.name.slice(1)}`;
           const group = groups.get(groupKey(getterName, method.token));
@@ -452,7 +469,8 @@ export function analyze(program, { imports = [], checkedArithmetic = false, serv
             if (node.typeArgs.length || !allowed.includes(node.args.length)) fail(node.token, `${consoleName} requires ${allowed.join(' or ')} argument(s), without type arguments`);
             for (const arg of node.args) {
               const type = expression(arg, state, mode);
-              if (!VALUE_TYPES.has(type) && !(method.token.sourceLanguage === 'kotlin' && parameters.has(type)))
+              if (type !== 'catch-value' && !VALUE_TYPES.has(type)
+                  && !(method.token.sourceLanguage === 'kotlin' && parameters.has(type)))
                 fail(arg.token, 'Console supports int, bool and string values, not an unconstrained type parameter');
             }
             node.consoleName = consoleName; type = 'void'; break;
@@ -533,6 +551,13 @@ export function analyze(program, { imports = [], checkedArithmetic = false, serv
           }
           break;
         }
+        case 'catch-parameter': {
+          const variable = declare(node.token, node.type.name, false, node.type.nullable === true);
+          node.variable = variable;
+          state.assigned.add(variable.slot);
+          state.possiblyAssigned.add(variable.slot);
+          break;
+        }
         case 'expressions':
           node.values.forEach(value => {
             statementExpression(value, state);
@@ -545,7 +570,11 @@ export function analyze(program, { imports = [], checkedArithmetic = false, serv
           const branches = [protectedState];
           for (const handler of node.catches) {
             const handlerState = copy(state);
+            handler.body.statements.unshift({
+              kind: 'catch-parameter', token: handler.parameter.token, type: handler.parameter.type
+            });
             statement(handler.body, handlerState);
+            handler.parameter.variable = handler.body.statements[0].variable;
             branches.push(handlerState);
           }
           if (node.finallyBody) statement(node.finallyBody, protectedState);
@@ -632,6 +661,12 @@ export function analyze(program, { imports = [], checkedArithmetic = false, serv
       field.value = coerce(field.value, field.type);
     }
     if (state.reachable && method.returnType.name !== 'void') fail(method.token, 'Not all code paths return a value');
+    if (method.globalsInit) {
+      method.locals.forEach((variable, index) => {
+        variable.slot = `CS_G${index}`;
+        globalVariables.set(variable.name, variable);
+      });
+    }
   }
   return { methods, entry };
 }

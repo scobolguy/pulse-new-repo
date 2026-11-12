@@ -25,6 +25,8 @@ void registerPMachineRoutes(
 	FederatedFileSystem* ffs = nullptr,
 	pmachine::PMachine* asyncWorkerMachine = nullptr
 );
+// Resolves and executes the immutable fixed-name boot program when present.
+bool runPMachineFixedBoot(pmachine::PMachine& machine, FederatedFileSystem* ffs);
 // Gives the hosted service host its FFS for string-arena swap; nothing is reserved until a
 // service is installed.
 void configurePMachineHostedStorage(FederatedFileSystem& ffs);

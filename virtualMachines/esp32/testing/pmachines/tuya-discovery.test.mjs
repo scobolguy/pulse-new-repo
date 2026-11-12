@@ -87,6 +87,19 @@ test('generic crypto bindings validate CRC, padding, hex and AES argument sizes'
   assert.throws(() => bindings['host.bytes_aes_gcm_decrypt']('', key.toString('hex'), '', '', ''), /nonce/);
 });
 
+test('network bindings expose local IPv4 addresses and netmask-derived broadcast ranges', () => {
+  const subnets = JSON.parse(bindings['host.local_ipv4_subnets']());
+  assert.ok(Array.isArray(subnets));
+  for (const subnet of subnets) {
+    assert.match(subnet.address, /^\d+\.\d+\.\d+\.\d+$/);
+    assert.match(subnet.netmask, /^\d+\.\d+\.\d+\.\d+$/);
+    assert.match(subnet.network, /^\d+\.\d+\.\d+\.\d+$/);
+    assert.match(subnet.broadcast, /^\d+\.\d+\.\d+\.\d+$/);
+    assert.ok(Number.isInteger(subnet.prefixLength));
+    assert.ok(subnet.prefixLength >= 0 && subnet.prefixLength <= 32);
+  }
+});
+
 test('Tuya discovery pages observations two at a time without loss', async t => {
   const instance = await host(t);
   for (let index = 0; index < 7; index++) {

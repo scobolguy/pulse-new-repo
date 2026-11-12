@@ -28,6 +28,34 @@ function compiledOptions(artifact, opcodeMap, runtimeContext = {}) {
   };
 }
 
+test('stdout callback observes lines before host calls and final partial output', async () => {
+  const scheduler = new PMachineScheduler({ slots: 1 });
+  const events = [];
+  const program = 'PUSH_STR "Hello"\nPRINT\nPRINT_NL\nPUSH_STR "prompt"\nCALL_EXT screen.accept 1\nPUSH_STR "Bye"\nPRINT\nHALT';
+  const result = await scheduler.execute(options(program, {
+    onStdoutLine: line => events.push(line),
+    callHost: () => { events.push('host'); return 'answer'; },
+  }));
+  assert.deepEqual(events, ['Hello', 'host', 'Bye']);
+  assert.deepEqual(result.stdout, ['Hello', 'Bye']);
+  const withoutCallback = await scheduler.execute(options(program, { callHost: () => 'answer' }));
+  assert.deepEqual(withoutCallback.stdout, result.stdout);
+  await assert.rejects(scheduler.execute(options('HALT', { onStdoutLine: 'invalid' })),
+    /onStdoutLine must be a function/);
+});
+
+test('stdout callback observes FORTRAN output records', async () => {
+  const scheduler = new PMachineScheduler({ slots: 1 });
+  const lines = [];
+  const program = [
+    'CALL_EXT fortran.begin 0', 'PUSH_INT 42', 'PUSH_STR "I"', 'CALL_EXT fortran.item 2',
+    'PUSH_STR "(I3)"', 'CALL_EXT fortran.print 1', 'HALT',
+  ].join('\n');
+  const result = await scheduler.execute(options(program, { onStdoutLine: line => lines.push(line) }));
+  assert.deepEqual(result.stdout, [' 42']);
+  assert.deepEqual(lines, result.stdout);
+});
+
 test('compiled Kotlin, C# and VB share one slot with fair progress and isolated procedure state', async () => {
   const scheduler = new PMachineScheduler({ slots: 1, quantum: 8 });
   const opcodeMap = await loadOpcodeMap();

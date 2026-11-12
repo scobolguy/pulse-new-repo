@@ -6,6 +6,27 @@ compiler to P-code. The initial target is the JavaScript P-machine for local
 validation, with generic-native and opt-in ESP32 tests for the same cases.
 This is not full Kotlin/Core conformance.
 
+### Checkpoint example
+
+`examples\helloBye.kt` prints `Hello`, checkpoints its application phase, and
+prints `Bye` when that phase is restored. Run
+`node languages\kotlin\scripts\run-hello-bye.mjs <absolute-checkpoint-directory>`
+from the repository root to wait five minutes and resume on a separate local
+JavaScript P-machine scheduler. Both checkpoint replicas are files on the same
+host. This example does not snapshot the VM stack, resume the timer if the runner
+exits, or provide exactly-once output. It does not execute on the ESP32.
+
+### Kasa discovery
+
+The Pulse Kotlin service in `examples\kasa-discovery-daemon.kt` sends a Kasa
+probe using the generic UDP exchange binding. Call `/api/kasa/discover?ip=<address>`
+with a peer explicitly allowlisted at port 9999 in `networkPeers` when installing
+the hosted service. It probes one address per request and returns the raw response
+as hex; a timeout or denied peer is an error. It does not scan a subnet automatically.
+ESP32 no longer implements `host.kasa_discover`; applications using that
+binding must migrate to generic UDP. Its `networkDiscoveryStep()` now probes
+cameras only.
+
 ### Conformance architecture
 
 The JetBrains compiler is organized around a frontend and backend split:
@@ -79,8 +100,8 @@ not silently erased.
 the first scalar exception slice: `TRY_BEGIN`/`TRY_END` frames transfer a
 thrown scalar value to one `catch` handler, unwind procedure frames, and run
 `finally` blocks. Throw expressions are treated as non-returning
-(`Nothing`-like) for return-path analysis. The ESP32 target rejects programs
-using this feature until its native exception-frame dispatcher is implemented.
+(`Nothing`-like) for return-path analysis. The JavaScript and ESP32 targets
+support this bounded exception-frame slice.
 They can therefore occupy the non-value branch of a value-producing `if`
 expression. Active `finally` blocks are emitted before an uncaught throw;
 `return`, `break`, and `continue`; catchable unwinding remains pending.
@@ -257,6 +278,47 @@ of 1–4096 bytes. Request and response bytes are hexadecimal strings. TCP
 uses length-prefixed responses with a 1–4 byte big-endian prefix; its returned
 hex includes the prefix. These are bounded exchanges, not general-purpose
 socket streams, and do not provide HTTP or TLS.
+
+### ESP32 Kasa probe
+
+[esp32-kasa-probe.kt](examples/esp32-kasa-probe.kt) is a working Kotlin
+service example that runs on the ESP32 P-machine and queries legacy Kasa
+devices such as the HS200 on TCP port `9999`. Call it with an `ip` query
+parameter:
+
+```text
+GET /api/kasa?ip=192.168.2.28
+```
+
+The handler uses `tcpExchange` to send Kasa's framed
+`system.get_sysinfo` request. The request payload is:
+
+1. A four-byte big-endian length prefix (`0000001d`).
+2. The JSON body `{"system":{"get_sysinfo":{}}}` encrypted with Kasa's
+   rolling XOR key, initialized to `0xAB`.
+
+The `4` argument tells the P-machine that the response has the same
+four-byte length prefix. The service returns the response bytes as a
+hexadecimal string, including that prefix. The caller must remove the prefix
+and apply Kasa's rolling XOR decryption before parsing the JSON response.
+Successful responses contain `system.get_sysinfo.err_code == 0`, along with
+fields such as `model`, `alias`, `mac`, and `rssi`.
+
+When installing the service, authorize each target explicitly in the
+`networkPeers` allowlist, for example:
+
+```json
+[
+  { "ip": "192.168.2.28", "port": 9999 },
+  { "ip": "192.168.2.29", "port": 9999 }
+]
+```
+
+Keep the allowlist bounded. On the tested ESP32-S3, a 254-address allowlist
+does not fit in the hosted-service heap; scan larger ranges as separate
+20-address batches, installing each batch's peer list before probing it.
+The ESP32 service host also requires an idle daemon alongside the service
+image. Do not expose TCP port `9999` beyond the trusted LAN.
 
 ## Generate, compile, and test
 

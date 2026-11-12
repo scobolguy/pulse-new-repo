@@ -264,10 +264,10 @@ private:
 };
 // Daemon datagrams above this size are dropped; below the heap floor they are shed.
 constexpr size_t DAEMON_DATAGRAM_LIMIT = 1024, DAEMON_UDP_HEAP_FLOOR = 8192;
-// Two installed contexts, up to four images each, with six image leases total;
-// failed installations return their slots.
-std::array<HostedImage, 6> hostedImages;
-std::array<std::atomic<bool>, 6> hostedImageUsed{};
+// Two installed contexts may collectively own two service images plus up to
+// sixteen daemon images. Failed installations return their slots.
+std::array<HostedImage, 18> hostedImages;
+std::array<std::atomic<bool>, 18> hostedImageUsed{};
 std::shared_ptr<HostedImage> reserveHostedImage() {
     for (size_t index = 0; index < hostedImages.size(); ++index) {
         bool expected = false;
@@ -321,7 +321,10 @@ const Binding bindings[] = {
     {"buffer_hex", "i", true}, {"buffer_text", "i", true}, {"buffer_release", "i", false},
     {"byte_xor", "ii", false}, {"tcp_exchange", "sisiii", true},
     {"tcp_exchange_buffer", "sisiii", false},
-    {"udp_exchange", "sisii", true}, {"filesystem_post", "sissi", true},
+    {"udp_exchange", "sisii", true}, {"local_ipv4_subnets", "", true},
+    {"camera_discover", "", true},
+    {"network_discovery_step", "", true},
+    {"filesystem_post", "sissi", true},
     {"service_submit", "sss", true}, {"await_reply", "s", true}
 };
 const Binding* binding(const std::string& symbol) {
@@ -514,10 +517,13 @@ bool ServiceHost::validateUnit(const JsonDocument& map, const char* kind, Unit& 
         switch (instruction.opcode) {
         case OP_CALL_EXT: {
             const auto* spec = binding(instruction.strOperand);
-            if (!spec || instruction.value != static_cast<int>(strlen(spec->args))) {
+            const bool systemToString = instruction.strOperand == "system.int32.tostring";
+            if ((!spec && !systemToString)
+                || (!systemToString && instruction.value != static_cast<int>(strlen(spec->args)))
+                || (systemToString && instruction.value != 1)) {
                 error = "Unknown hosted binding or invalid arity"; return false;
             }
-            if (std::string(spec->name) == "service_submit") out.requiresAggregatorTransaction = true;
+            if (spec && std::string(spec->name) == "service_submit") out.requiresAggregatorTransaction = true;
             break;
         }
         case OP_CALL_LABEL:
@@ -699,7 +705,7 @@ bool ServiceHost::prepare(std::string& error) {
         error = "Service host busy or unavailable"; return false;
     }
     bool ok = std::any_of(services.begin(), services.end(), [](const std::shared_ptr<Context>& item) { return !item; });
-    if (!ok) error = "Hosted service capacity exceeded (maximum two)";
+    if (!ok) error = "Hosted process capacity exceeded (maximum seventeen)";
     else {
         try {
             hostError.reserve(256);
@@ -735,8 +741,8 @@ bool ServiceHost::install(Unit newService, std::vector<DaemonSpec> newDaemons, c
         error = "TTL must exceed heartbeat interval, with maximum 180000 ms; valid collector ID required";
         return false;
     }
-    if (newDaemons.empty() || newDaemons.size() > DAEMON_LIMIT) {
-        error = "Hosted daemon count must be 1..3"; return false;
+    if (newDaemons.size() > DAEMON_LIMIT) {
+        error = "Hosted daemon count must be 0..16"; return false;
     }
     if (newService.requiredServices.size() != lifecycle.requires.size()
         || lifecycle.bindings.size() != lifecycle.requires.size()) {
@@ -835,8 +841,12 @@ bool ServiceHost::install(Unit newService, std::vector<DaemonSpec> newDaemons, c
     }
     bool ok = false;
     try {
+        size_t installedDaemons = 0;
+        for (const auto& existing : services) if (existing) installedDaemons += existing->daemonCount;
         auto slot = std::find(services.begin(), services.end(), nullptr);
-        if (slot == services.end()) error = "Hosted service capacity exceeded (maximum two)";
+        if (installedDaemons + newDaemons.size() > NODE_DAEMON_LIMIT)
+            error = "Hosted node daemon capacity exceeded (maximum sixteen)";
+        else if (slot == services.end()) error = "Hosted process capacity exceeded (maximum seventeen)";
         else {
             bool conflict = false;
             for (const auto& existing : services) if (existing) {
@@ -856,6 +866,7 @@ bool ServiceHost::install(Unit newService, std::vector<DaemonSpec> newDaemons, c
             if (conflict) error = "Duplicate collector ID, UDP port or route; multi-service images need endpoint metadata";
             else {
                 auto context = std::make_shared<Context>();
+                context->daemons.resize(newDaemons.size());
                 context->lastError.reserve(256);
                 if (network.configure(networkPeers, context->network, error)) {
                     Serial.printf("[SERVICE-HOST] Installing id=%s port=%u heap=%u largest=%u\n",
@@ -973,9 +984,10 @@ bool ServiceHost::call(const std::string& symbol, const std::vector<HostValue>& 
 bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>& args,
                          HostValue& result, std::string& error) {
     if (!current) return fail("Hosted service context unavailable", error, 503);
-    auto& tables = current->tables;
-    auto& tableCapacities = current->service.tableCapacities;
-    const bool hasTableDeclarations = current->service.hasTableDeclarations;
+    auto& tables = activeDaemon ? activeDaemon->tables : current->tables;
+    auto& tableCapacities = activeDaemon ? activeDaemon->unit.tableCapacities : current->service.tableCapacities;
+    const bool hasTableDeclarations = activeDaemon
+        ? activeDaemon->unit.hasTableDeclarations : current->service.hasTableDeclarations;
     auto& collectorId = current->collectorId;
     auto& bootId = current->bootId;
     auto& sequence = current->sequence;
@@ -1071,7 +1083,9 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
     }
     else if (op.rfind("bytes_", 0) == 0 || (op.rfind("buffer_", 0) == 0 && op.rfind("buffer_json_", 0) != 0)
         || op == "byte_xor" || op == "tcp_exchange" || op == "tcp_exchange_buffer"
-        || op == "udp_exchange" || op == "filesystem_post") {
+        || op == "udp_exchange" || op == "local_ipv4_subnets"
+        || op == "camera_discover"
+        || op == "network_discovery_step" || op == "filesystem_post") {
         if (!network.invoke(op, args, result, error)) return fail(error, error, 502);
     }
     else if (op == "event_body") result.text = body;
@@ -1834,7 +1848,9 @@ bool ServiceHost::runDaemon(Daemon& daemon) {
     }
     observedAt = now();
     std::string response;
+    activeDaemon = &daemon;
     const bool ok = execute(daemon.unit, response);
+    activeDaemon = nullptr;
     eventUdp = nullptr;
     if (!ok) {
         ++daemon.failures;
@@ -2125,6 +2141,15 @@ void ServiceHost::diagnostics(JsonObject doc) {
     }
 }
 
+bool ServiceHost::runningCollectorIds(std::vector<std::string>& ids) {
+    ids.clear();
+    if (!mutex) return true;
+    if (xSemaphoreTake(mutex, 0) != pdTRUE) return false;
+    SemaphoreRelease release{mutex};
+    for (const auto& context : services) if (context) ids.push_back(context->collectorId);
+    return true;
+}
+
 std::string ServiceHost::status(const std::string& id) {
     if (!mutex) return "{\"running\":false,\"hostBindingsVersion\":1}";
     if (xSemaphoreTake(mutex, 0) != pdTRUE)
@@ -2188,7 +2213,7 @@ std::string ServiceHost::status(const std::string& id) {
             doc["bootId"] = selected->bootId;
             doc["udpPort"] = selected->udpPort;
             doc["observationTtlMs"] = selected->ttl;
-            doc["daemonIntervalMs"] = selected->daemons[0].unit.interval;
+            doc["daemonIntervalMs"] = selected->daemonCount ? selected->daemons[0].unit.interval : 0;
             doc["lastError"] = selected->lastError;
             doc["ownerAggregatorId"] = selected->lifecycle.ownerAggregatorId;
             doc["reportTargets"] = reportTargetsFor(*selected).size();
@@ -2251,22 +2276,26 @@ void ServiceHost::describe(JsonObject doc, const Context& context, bool details)
     const auto& bootId = context.bootId;
     const auto udpPort = context.udpPort;
     const auto ttl = context.ttl;
-    const auto& daemon = context.daemons[0].unit;
     const auto& service = context.service;
     const auto& tables = context.tables;
     const auto& lastError = context.lastError;
     const auto& lastHttpJsonMetrics = context.lastHttpJsonMetrics;
     doc["collectorId"] = collectorId; doc["bootId"] = bootId; doc["udpPort"] = udpPort;
-    doc["observationTtlMs"] = ttl; doc["daemonIntervalMs"] = daemon.interval;
+    doc["observationTtlMs"] = ttl;
+    doc["daemonIntervalMs"] = context.daemonCount ? context.daemons[0].unit.interval : 0;
     doc["lastError"] = lastError;
     size_t count = 0;
     for (const auto& table : tables) count += table.second.size();
     doc["entries"] = count;
     if (service.image) {
+        const auto cache = HostedImage::cacheStats();
         doc["instructionStorage"] = service.image->isResident() ? "psram-resident" : "ffs-paged";
         doc["instructionCount"] = service.image->size();
         doc["instructionPageReads"] = service.image->pageReads;
         doc["instructionCacheHits"] = service.image->cacheHits;
+        doc["instructionCacheStorage"] = cache.psram ? "psram" : "internal";
+        doc["instructionCacheReservedBytes"] = cache.reservedBytes;
+        doc["instructionCacheCapacityPages"] = cache.pages;
     }
     doc["httpInvocations"] = context.httpInvocations;
     doc["udpInvocations"] = context.udpInvocations;

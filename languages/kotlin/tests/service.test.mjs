@@ -9,6 +9,30 @@ import { encodeHostedImage } from '../../../virtualMachines/esp32/pmachines/shar
 
 const source = await fs.readFile(new URL('../examples/http-service.kt', import.meta.url), 'utf8');
 
+test('factorial service computes 1 through 10 and reports invalid input', async t => {
+  const factorialSource = await fs.readFile(new URL('../examples/factorial-service.kt', import.meta.url), 'utf8');
+  const compiled = compileKotlinToPcode(factorialSource, { fileName: 'factorial-service.kt', target: 'esp32' });
+  const host = await createPascalishServiceHost({
+    compiled, collectorId: 'factorial-test', httpPort: null, udpPort: null,
+    logger: { warn() {}, error() {}, log() {} }
+  });
+  t.after(() => host.stop());
+  await host.start();
+  let expected = 1;
+  for (let n = 1; n <= 10; n += 1) {
+    expected *= n;
+    const response = await host.dispatch({
+      transport: 'http', method: 'GET', path: '/api/factorial', query: { n: String(n) }
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body, { n, factorial: expected });
+  }
+  const invalid = await host.dispatch({
+    transport: 'http', method: 'GET', path: '/api/factorial', query: { n: '11' }
+  });
+  assert.deepEqual(invalid.body, { error: 'n must be an integer from 1 through 10' });
+});
+
 test('Kotlin service exposes multiple GET endpoints through the JavaScript HTTP host', async t => {
   const compiled = compileKotlinToPcode(source, { fileName: 'kotlin_service.kt', target: 'js' });
   assert.deepEqual(compiled.programMap.runtimeUnit, { kind: 'service', id: 'kotlin_service', refreshMs: null });
@@ -151,6 +175,42 @@ fun network(): String = tcpExchange("127.0.0.1", ${tcpPort}, "41", 2, 1000, 32) 
   }), /Network peer is not allowed/);
 });
 
+test('Kasa application sends its probe through generic UDP and reports network failures', async t => {
+  const udp = dgram.createSocket('udp4');
+  await new Promise((resolve, reject) => {
+    udp.once('error', reject);
+    udp.bind(0, '127.0.0.1', resolve);
+  });
+  t.after(() => new Promise(resolve => udp.close(resolve)));
+  let respond = true;
+  const received = [];
+  udp.on('message', (message, peer) => {
+    received.push(message.toString('hex'));
+    if (respond) udp.send(Buffer.from('1234', 'hex'), peer.port, peer.address);
+  });
+  const port = udp.address().port;
+  const example = await fs.readFile(new URL('../examples/kasa-discovery-daemon.kt', import.meta.url), 'utf8');
+  const source = example.replace('const val KASA_DISCOVERY_PORT = 9999', `const val KASA_DISCOVERY_PORT = ${port}`);
+  const compiled = compileKotlinToPcode(source, { fileName: 'kasa-discovery-daemon.kt', target: 'esp32' });
+  assert.match(compiled.pcodeText, /CALL_EXT host\.udp_exchange/);
+  assert.doesNotMatch(compiled.pcodeText, /host\.kasa_discover/);
+  const host = await createPascalishServiceHost({
+    compiled, collectorId: 'kotlin-kasa', httpPort: null, udpPort: null,
+    networkPeers: [{ ip: '127.0.0.1', port }], logger: { warn() {}, error() {}, log() {} }
+  });
+  t.after(() => host.stop());
+  await host.start();
+  const dispatch = ip => host.dispatch({
+    transport: 'http', method: 'GET', path: '/api/kasa/discover', query: { ip }
+  });
+  const result = await dispatch('127.0.0.1');
+  assert.deepEqual(result.body, { address: '127.0.0.1', responseHex: '1234' });
+  assert.deepEqual(received, ['d0f281f88bff9af7d5ef94b6d1b4c09fec95e68fe187e8caf08bf68bf6']);
+  await assert.rejects(dispatch('127.0.0.2'), /Network peer is not allowed/);
+  respond = false;
+  await assert.rejects(dispatch('127.0.0.1'), /UDP exchange timeout/);
+});
+
 for (const [description, sourceText, expected] of [
   ['non-string result', '@HttpGet("/api/a") fun endpoint(): Int = 1', /return String/],
   ['handler parameters', '@HttpGet("/api/a") fun endpoint(x: Int): String = "ok"', /take no parameters/],
@@ -163,7 +223,7 @@ for (const [description, sourceText, expected] of [
   ['wrong host binding argument type', 'import pulse.http.requestQuery\n@HttpGet("/api/a") fun a(): String = requestQuery(1)', /Cannot use 'int' where 'string'/],
   ['host bindings outside services', 'import pulse.http.requestBody\nfun main() { println(requestBody()) }', /Unknown static method 'requestBody'/],
   ['unsupported annotation shape', '@HttpGet<Int>("/api/a") fun a(): String = "a"', /does not accept type arguments/],
-  ['unavailable scalar library binding', '@HttpGet("/api/a") fun a(): String { val n = 4\n return "n=" + n\n}', /do not yet support scalar library calls/]
+  ['unavailable scalar library binding', 'import pulse.http.requestQuery\n@HttpGet("/api/a") fun a(): String { val n = requestQuery("n").length\n val half = n / 2\n return "n=$half"\n}', /do not yet support scalar library calls/]
 ]) {
   test(`Kotlin service rejects ${description}`, () => {
     assert.throws(() => compileKotlinToPcode(sourceText, { fileName: 'service.kt' }), expected);

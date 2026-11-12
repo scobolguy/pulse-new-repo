@@ -4,6 +4,7 @@ import VbishParser from '../grammar/generated/VbishParser.js';
 import { compileScalarToPcode } from '../../dotnet/compile-scalar-to-pcode.mjs';
 import { fail } from '../../dotnet/source-diagnostics.mjs';
 import { prepareScalarImports, linkScalarLibraries } from '../../dotnet/scalar-library.mjs';
+import { PULSE_NETWORK_IMPORTS } from '../../dotnet/pulse-network-library.mjs';
 
 const typeNames = { integer: 'int', sbyte: 'sbyte', byte: 'byte', short: 'short', ushort: 'ushort', boolean: 'bool', string: 'string' };
 const normalized = text => text.replace(/^\[|\]$/g, '').toLowerCase();
@@ -28,7 +29,10 @@ export function parseVb11(source, { fileName = 'program.vb' } = {}) {
 }
 
 export function compileVb11ToPcode(source, { fileName = 'program.vb', libraries = [], target = 'js' } = {}) {
-  const imports = prepareScalarImports(libraries, 'vbish', target);
+  const imports = [
+    ...PULSE_NETWORK_IMPORTS.map(item => ({ ...item, key: item.key.toLowerCase() })),
+    ...prepareScalarImports(libraries, 'vbish', target)
+  ];
   const tree = parseVb11(source, { fileName });
   const token = ctx => {
     const start = ctx.start || ctx.symbol || ctx;

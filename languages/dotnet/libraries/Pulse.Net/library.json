@@ -1,0 +1,28 @@
+{
+  "id": "Pulse.Net",
+  "version": "0.1.0",
+  "languages": ["csharp", "vbish", "kotlin"],
+  "types": ["string"],
+  "members": [
+    {
+      "name": "Pulse.Net.LocalIpv4Subnets",
+      "parameters": [],
+      "result": "string"
+    },
+    {
+      "name": "Pulse.Net.KasaDiscover",
+      "parameters": [],
+      "result": "string"
+    },
+    {
+      "name": "Pulse.Net.CameraDiscover",
+      "parameters": [],
+      "result": "string"
+    }
+  ],
+  "hostBindings": {
+    "Pulse.Net.LocalIpv4Subnets": "host.local_ipv4_subnets",
+    "Pulse.Net.KasaDiscover": "host.kasa_discover",
+    "Pulse.Net.CameraDiscover": "host.camera_discover"
+  }
+}

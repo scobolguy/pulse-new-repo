@@ -50,14 +50,18 @@ public:
     struct Context;
     // A daemon may own one UDP port; its datagrams trigger that daemon (method "UDP").
     struct DaemonSpec { Unit unit; uint16_t udpPort = 0; std::string multicastGroup; };
-    static constexpr size_t DAEMON_LIMIT = 3;
+    // A node may host up to sixteen scheduled daemons across its contexts.
+    // They remain single-worker and are time-sliced fairly; this is a capacity
+    // limit, not a promise of sixteen concurrent network executions.
+    static constexpr size_t DAEMON_LIMIT = 16;
+    static constexpr size_t NODE_DAEMON_LIMIT = 16;
     ServiceHost();
     // Legacy shape: one daemon; the service owns the required UDP port.
     bool install(Unit service, Unit daemon, const std::string& id, uint16_t port,
                  uint32_t ttl, uint32_t heartbeat, std::string& error,
                  JsonVariantConst networkPeers = JsonVariantConst(),
                  LifecycleMetadata lifecycle = {});
-    // Shared-context shape: 1..3 daemons, with six total image leases across two contexts.
+    // Shared-context shape: 1..16 daemons, with node-wide bounded image leases.
     bool install(Unit service, std::vector<DaemonSpec> daemons, const std::string& id, uint16_t port,
                  uint32_t ttl, uint32_t heartbeat, std::string& error,
                  JsonVariantConst networkPeers = JsonVariantConst(),
@@ -80,6 +84,7 @@ public:
                                       const std::string& ingressAggregatorId = "",
                                       const std::string& headers = "{}");
     std::string status(const std::string& id = "");
+    bool runningCollectorIds(std::vector<std::string>& ids);
     void diagnostics(JsonObject doc);
     std::string readiness(const std::string& id = "");
     bool handles(const std::string& method, const std::string& path);
@@ -157,13 +162,14 @@ public:
         uint16_t udpPort = 0;
         std::string multicastGroup;
         std::unique_ptr<WiFiUDP> udp;
+        std::map<std::string, Table> tables;
         uint64_t nextTick = 0;
         uint32_t timerRuns = 0, udpEvents = 0, failures = 0, droppedDatagrams = 0, shedDatagrams = 0;
         std::string lastError;
     };
     struct Context {
         Unit service;
-        std::array<Daemon, DAEMON_LIMIT> daemons;
+        std::vector<Daemon> daemons;
         size_t daemonCount = 0, nextSource = 0;
         std::map<std::string, Table> tables;
         std::unique_ptr<HostCacheStore> caches{new LocalHostCacheStore()};
@@ -181,9 +187,10 @@ public:
         bool installed = true;
     };
 private:
-    static constexpr size_t SERVICE_LIMIT = 2;
+    static constexpr size_t SERVICE_LIMIT = 17;
     std::array<std::shared_ptr<Context>, SERVICE_LIMIT> services;
     std::shared_ptr<Context> current;
+    Daemon* activeDaemon = nullptr;
     size_t nextBackgroundService = 0;
     std::string hostError;
     FederatedFileSystem* swapFileSystem = nullptr;
