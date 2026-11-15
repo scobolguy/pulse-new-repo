@@ -17,6 +17,26 @@ function bytes(hex) {
   return Buffer.from(hex, 'hex');
 }
 
+export function parseOnvifProbeMatch(message, peerAddress) {
+  const response = Buffer.isBuffer(message) ? message.toString('utf8') : String(message);
+  if (!/<(?:[\w.-]+:)?ProbeMatch(?:\s|>)/i.test(response) ||
+      !/NetworkVideoTransmitter/i.test(response)) return null;
+  const match = /<(?:[\w.-]+:)?XAddrs(?:\s[^>]*)?>([\s\S]*?)<\/(?:[\w.-]+:)?XAddrs\s*>/i.exec(response);
+  const serviceUrl = match?.[1]?.trim().split(/\s+/)[0];
+  if (!serviceUrl) return null;
+  let url;
+  try { url = new URL(serviceUrl); } catch { return null; }
+  if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password ||
+      !url.hostname || url.hash) return null;
+  return {
+    kind: 'camera',
+    protocol: 'onvif',
+    address: peerAddress,
+    port: Number(url.port || (url.protocol === 'https:' ? 443 : 80)),
+    serviceUrl
+  };
+}
+
 export function createNetworkBindings(networkPeers = []) {
   if (!Array.isArray(networkPeers) || networkPeers.length > 256) throw new Error('Invalid network peer allowlist');
   const peers = new Set(networkPeers.map(peer => {
@@ -123,48 +143,15 @@ export function createNetworkBindings(networkPeers = []) {
         resolve(JSON.stringify(devices));
       });
       socket.on('message', (message, peer) => {
-        devices.push({ kind: 'camera', protocol: 'onvif', address: peer.address, port: peer.port || 3702,
-          response: message.toString('utf8').slice(0, 2048) });
+        const device = parseOnvifProbeMatch(message, peer.address);
+        if (device && !devices.some(item => item.serviceUrl === device.serviceUrl)) devices.push(device);
       });
       socket.bind(0, discoverySubnets()[0]?.address || '0.0.0.0', () => {
         socket.addMembership('239.255.255.250');
         socket.send(probe, 3702, '239.255.255.250');
       });
     });
-    const rtsp = async () => {
-      const results = [];
-      for (const subnet of discoverySubnets()) {
-        const addresses = discoveryAddresses(subnet);
-        for (let index = 0; index < addresses.length; index += 24) {
-          await Promise.all(addresses.slice(index, index + 24).flatMap(address =>
-            [554, 2020].map(port => new Promise(resolve => {
-              const socket = net.createConnection({ host: address, port });
-              let response = '', settled = false;
-              const finish = () => {
-                if (settled) return;
-                settled = true;
-                socket.destroy();
-                if (/^RTSP\/1\.[01]/m.test(response)) {
-                  devices.push({ kind: 'camera', protocol: 'rtsp', address, port });
-                }
-                resolve();
-              };
-              socket.setTimeout(250, finish);
-              socket.once('error', finish);
-              socket.once('connect', () => socket.write(
-                `OPTIONS rtsp://${address}:${port}/ RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: PulseDiscovery\r\n\r\n`
-              ));
-              socket.on('data', chunk => { response += chunk.toString('ascii'); finish(); });
-            }))
-          ));
-        }
-      }
-      return results;
-    };
-    return Promise.race([
-      Promise.all([onvif, rtsp()]).then(() => JSON.stringify(devices)),
-      new Promise(resolve => setTimeout(() => resolve(JSON.stringify(devices)), 15000))
-    ]);
+    return onvif;
   }
   async function filesystemPost(ip, port, route, body, timeout, { signal }) {
     if (!peers.has(`${ip}:${port}`)) throw new Error('Network peer is not allowed');
@@ -281,6 +268,18 @@ export function createNetworkBindings(networkPeers = []) {
         socket.connect(port, ip, () => socket.write(payload));
       });
     },
+    'host.network_peer_allowed': (ip, port) => peers.has(`${ip}:${port}`) ? 1 : 0,
+    'host.udp_send': (ip, port, hex, { socket, signal }) => {
+      if (!socket) throw new Error('UDP send requires an owned daemon socket');
+      if (!peers.has(`${ip}:${port}`)) throw new Error('Network peer is not allowed');
+      const payload = bytes(hex);
+      if (!payload.length || payload.length > 1024) throw new Error('Invalid or oversized UDP request');
+      signal.throwIfAborted();
+      socket.setBroadcast(true);
+      return new Promise((resolve, reject) => {
+        socket.send(payload, port, ip, error => error ? reject(error) : resolve(0));
+      });
+    },
     'host.udp_exchange': (ip, port, hex, timeout, maxBytes, { signal }) => {
       const payload = validate(ip, port, hex, timeout, maxBytes);
       return new Promise((resolve, reject) => {
@@ -313,6 +312,9 @@ export function createNetworkBindings(networkPeers = []) {
     'host.local_ipv4_subnets': localIpv4Subnets
     ,
     'host.kasa_discover': kasaDiscover,
-    'host.camera_discover': cameraDiscover
+    'host.camera_discover': cameraDiscover,
+    'host.bluetooth_scan': async () => {
+      throw new Error('Bluetooth discovery is only supported by the ESP32 host');
+    }
   };
 }

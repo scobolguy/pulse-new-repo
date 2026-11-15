@@ -6,10 +6,38 @@ import { compileScalarToPcode } from '../../dotnet/compile-scalar-to-pcode.mjs';
 import { prepareScalarImports, linkScalarLibraries } from '../../dotnet/scalar-library.mjs';
 import { createDotnetServiceContract } from '../../dotnet/service-contract.mjs';
 import { PULSE_NETWORK_IMPORTS } from '../../dotnet/pulse-network-library.mjs';
+import { cacheConstraintError, parseCacheFields } from '../../dotnet/cache-schema.mjs';
+
+function attributeValues(attribute) {
+  const values = {};
+  const positional = [];
+  for (const argument of attribute.arguments || []) {
+    if (argument.kind === 'assign' && argument.left.kind === 'name') values[argument.left.name] = argument.right;
+    else positional.push(argument);
+  }
+  return { positional, values };
+}
+
+function literalValue(node) {
+  return node?.kind === 'literal' ? node.value : undefined;
+}
 
 export function compileCsharpToPcode(source, { fileName = 'program.cs', libraries = [], target = 'js' } = {}) {
   if (typeof source !== 'string') throw new TypeError('C# source must be a string');
   const program = parseCsharp(source, { fileName });
+  const daemonClasses = program.classes.filter(item => item.attributes?.some(attribute => attribute.name === 'Daemon'));
+  const cacheDeclarations = program.classes.flatMap(item => item.attributes?.filter(attribute => attribute.name === 'Cache')
+    .map(attribute => ({ attribute, owner: item.name })) || []);
+  const virtualCacheDeclarations = program.classes.flatMap(item => item.attributes?.filter(attribute => attribute.name === 'VirtualCache')
+    .map(attribute => ({ attribute, owner: item.name })) || []);
+  if (daemonClasses.length > 1) throw new Error('C# source may declare only one [Daemon]');
+  const daemon = daemonClasses[0]?.attributes.find(attribute => attribute.name === 'Daemon');
+  const daemonValues = daemon ? attributeValues(daemon) : null;
+  const daemonId = daemon && literalValue(daemonValues.positional[0]);
+  const daemonRefreshMs = daemon && Number(literalValue(daemonValues.values.RefreshMs));
+  if (daemon && (typeof daemonId !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(daemonId)
+      || !Number.isSafeInteger(daemonRefreshMs) || daemonRefreshMs < 10 || daemonRefreshMs > 300000))
+    throw new Error('[Daemon] requires an id and RefreshMs between 10 and 300000');
   const serviceClass = program.classes.find(item =>
     item.modifiers.has('sealed') && item.methods.some(method => method.attributes.some(attribute =>
       ['HttpGet', 'HttpPost'].includes(attribute.name))));
@@ -45,6 +73,52 @@ export function compileCsharpToPcode(source, { fileName = 'program.cs', librarie
   const artifact = linkScalarLibraries(compileScalarToPcode(program, source, {
     fileName, sourceLanguage: 'csharp', imports, target, service
   }), libraries);
+  if (daemon) {
+    artifact.programMap.runtimeUnit = { kind: 'daemon', id: daemonId, refreshMs: daemonRefreshMs };
+    artifact.runtimeUnit = artifact.programMap.runtimeUnit;
+    artifact.programMap.targets = ['js', 'esp32'];
+    artifact.programMap.hostBindingsVersion = 1;
+  }
+  const caches = cacheDeclarations.map(cache => {
+    const values = attributeValues(cache.attribute);
+    const name = literalValue(values.positional[0]);
+    const capacity = Number(literalValue(values.values.Capacity));
+    const ttlMs = Number(literalValue(values.values.TtlMs));
+    const storage = literalValue(values.values.Storage) || 'RAM';
+    const mode = literalValue(values.values.Mode) || 'PERSISTENT';
+    const parsedFields = parseCacheFields(literalValue(values.values.Fields));
+    const uniqueBy = literalValue(values.values.UniqueBy);
+    const latestBy = literalValue(values.values.LatestBy);
+    if (typeof name !== 'string' || capacity !== 50
+      || !Number.isSafeInteger(ttlMs) || ttlMs < 1
+      || !['RAM', 'FFS'].includes(storage) || !['PERSISTENT', 'UPDATEABLE'].includes(mode)
+      || parsedFields.error
+      || uniqueBy !== undefined && (typeof uniqueBy !== 'string' || !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(uniqueBy))
+      || latestBy !== undefined && (typeof latestBy !== 'string' || !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(latestBy)))
+      throw new Error(`[Cache] requires a name, Capacity 50, positive TtlMs, and Fields: ${parsedFields.error || 'invalid declaration'}`);
+    const constraintError = cacheConstraintError(parsedFields.fields, uniqueBy, latestBy);
+    if (constraintError) throw new Error(`[Cache] ${constraintError}`);
+    return { name, capacity, ttlMs, storage, mode, fields: parsedFields.fields,
+      ...(uniqueBy ? { uniqueBy } : {}), ...(latestBy ? { latestBy } : {}) };
+  });
+  const virtualCaches = virtualCacheDeclarations.map(cache => {
+    const values = attributeValues(cache.attribute);
+    const name = literalValue(values.positional[0]);
+    const sources = literalValue(values.values.Sources)?.split(',').map(source => source.trim()).filter(Boolean);
+    const storage = literalValue(values.values.Storage) || 'RAM';
+    const mode = literalValue(values.values.Mode) || 'PERSISTENT';
+    if (typeof name !== 'string' || !Array.isArray(sources) || !sources.length
+      || sources.some(source => !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(source))
+      || !['RAM', 'FFS'].includes(storage) || !['PERSISTENT', 'UPDATEABLE'].includes(mode))
+      throw new Error('[VirtualCache] requires a name, comma-separated Sources, Storage, and Mode');
+    return { name, capacity: 50, fields: [], virtual: true, sources, storage, mode };
+  });
+  const names = [...caches, ...virtualCaches].map(cache => cache.name);
+  if (new Set(names).size !== names.length)
+    throw new Error('Cache names must be unique within a node');
+  if (caches.length || virtualCaches.length) {
+    artifact.programMap.hostCaches = [...caches, ...virtualCaches];
+  }
   if (service) {
     artifact.programMap.serviceEndpoints = service.contract.serviceEndpoints.map(endpoint => {
       const procedure = Object.values(artifact.programMap.procedures)

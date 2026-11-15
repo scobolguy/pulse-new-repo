@@ -33,18 +33,48 @@ export function registerRuntimeRegistryRoutes(app, deps) {
     normalizeGatewayRuntimeConfig
   } = deps;
 
+  async function getServicesDirectory(req) {
+    return buildServicesDirectory({
+      catalog: getInfrastructureCatalog(),
+      instances: Array.from(serviceInstanceRegistry.values()),
+      nodes: Array.from(discoveredNodes?.values() || []),
+      collectorUrls: readDiscoveryProviderConfig().collectorUrls,
+      origin: `${req.protocol}://${req.get('host')}`,
+    });
+  }
+
   app.get('/api/services', async (req, res) => {
     try {
-      const directory = await buildServicesDirectory({
-        catalog: getInfrastructureCatalog(),
-        instances: Array.from(serviceInstanceRegistry.values()),
-        nodes: Array.from(discoveredNodes?.values() || []),
-        collectorUrls: readDiscoveryProviderConfig().collectorUrls,
-        origin: `${req.protocol}://${req.get('host')}`,
-      });
-      res.json(directory);
+      res.json(await getServicesDirectory(req));
     } catch (error) {
       console.error('[Services] Directory failed:', error);
+      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  let cacheResolutionSequence = 0;
+  app.get('/api/cache-services/:serviceId/caches/:cacheName/snapshot', async (req, res) => {
+    const { serviceId, cacheName } = req.params;
+    if (!/^[A-Za-z_][A-Za-z0-9_.-]{0,127}$/.test(serviceId || '')
+      || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(cacheName || '')) {
+      return res.status(400).json({ error: 'Invalid cache service or cache name' });
+    }
+    try {
+      const directory = await getServicesDirectory(req);
+      const candidates = directory.services.filter(service => service.serviceId === serviceId
+        && typeof service.endpoint === 'string'
+        && !['disabled', 'failed', 'offline', 'stopped'].includes(String(service.status).toLowerCase())
+        && service.description?.ready !== false)
+        .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+      if (!candidates.length) return res.status(404).json({ error: `No available cache service '${serviceId}'` });
+      const instance = candidates[cacheResolutionSequence++ % candidates.length];
+      const base = new URL(instance.endpoint);
+      const snapshotUrl = new URL(
+        `/api/hosted/caches/${encodeURIComponent(cacheName)}/snapshot`, base.origin).href;
+      res.json({ serviceId, cacheName, snapshotUrl,
+        instanceId: instance.instanceId || instance.id, nodeId: instance.nodeId || null });
+    } catch (error) {
+      console.error('[Services] Cache source resolution failed:', error);
       res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
     }
   });

@@ -5,6 +5,7 @@ import { compileVb11ToPcode } from './compile-vb11.mjs';
 import { SERVICE_HOST_BINDINGS_VERSION } from '../../../virtualMachines/esp32/pmachines/shared/contracts/service-host-bindings.mjs';
 import { createDotnetServiceContract } from '../../dotnet/service-contract.mjs';
 import { HOST_CAPABILITIES_VERSION } from '../../../virtualMachines/esp32/pmachines/shared/contracts/host-capabilities.mjs';
+import { cacheConstraintError, parseCacheFields } from '../../dotnet/cache-schema.mjs';
 
 function collectMatches(source, pattern, map) {
   const values = [];
@@ -222,7 +223,35 @@ class VbishCodegen {
 export function compileVbishToPcode(sourceText, options = {}) {
   if (options.profile === 'vb11') return compileVb11ToPcode(sourceText, options);
   if (options.profile && options.profile !== 'pulse') throw new Error(`[VBISH] Unknown language profile '${options.profile}'`);
-  const native = compileVbishWithAntlr(sourceText, options);
+  const cacheDeclarations = collectMatches(sourceText,
+    /^\s*PULSE\s+CACHE\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))\s+CAPACITY\s+(\d+)\s+EVERY\s+(\d+)\s+(MS|S|M|SECOND|SECONDS)(?:\s+STORAGE\s+(RAM|FFS))?(?:\s+MODE\s+(PERSISTENT|UPDATEABLE))?(?:\s+FIELDS\s+(?:"([^"]+)"|'([^']+)'))?(?:\s+UNIQUE\s+BY\s+([A-Za-z_][A-Za-z0-9_]*))?(?:\s+LATEST\s+BY\s+([A-Za-z_][A-Za-z0-9_]*))?\s*$/gim,
+    match => {
+      const schema = match[9] || match[10];
+      const parsed = schema ? parseCacheFields(schema) : { fields: [], error: null };
+      if (parsed.error) throw new Error(`[VBISH] ${parsed.error}`);
+      const uniqueBy = match[11] || '';
+      const latestBy = match[12] || '';
+      const constraintError = parsed.fields.length ? cacheConstraintError(parsed.fields, uniqueBy, latestBy) : null;
+      if (constraintError) throw new Error(`[VBISH] ${constraintError}`);
+      const cache = {
+        name: String(match[1] || match[2] || match[3] || ''),
+        capacity: Number(match[4]),
+        ttlMs: Number(match[5]) * ({ MS: 1, S: 1000, SECOND: 1000, SECONDS: 1000, M: 60000 }[match[6].toUpperCase()] || 1),
+        storage: match[7] || 'RAM', mode: match[8] || 'PERSISTENT', fields: parsed.fields,
+        ...(uniqueBy ? { uniqueBy } : {}), ...(latestBy ? { latestBy } : {})
+      };
+      if (cache.capacity !== 50) throw new Error('[VBISH] PULSE CACHE capacity must be 50');
+      return cache;
+    });
+  const virtualCacheDeclarations = collectMatches(sourceText,
+    /^\s*PULSE\s+VIRTUAL\s+CACHE\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))\s+SOURCES\s+(?:"([^"]+)"|'([^']+)')(?:\s+STORAGE\s+(RAM|FFS))?(?:\s+MODE\s+(PERSISTENT|UPDATEABLE))?\s*$/gim,
+    match => ({
+      name: String(match[1] || match[2] || match[3] || ''),
+      sources: String(match[4] || match[5] || '').split(',').map(source => source.trim()).filter(Boolean),
+      capacity: 50, fields: [], virtual: true, storage: match[6] || 'RAM', mode: match[7] || 'PERSISTENT'
+    }));
+  const sourceForParser = sourceText.replace(/^\s*PULSE\s+(?:VIRTUAL\s+)?CACHE\b.*$/gim, '');
+  const native = compileVbishWithAntlr(sourceForParser, options);
   if (!native.valid) throw new Error(`[VBISH] Parse failed:\n${native.syntaxErrors.join('\n')}`);
   const built = new VbishCodegen().build(sourceText);
   const runtime = native.runtime || { kind: 'program', id: options.fileName?.replace(/\.[^.]+$/, '') || 'vbish-program', placement: 'local' };
@@ -254,6 +283,19 @@ export function compileVbishToPcode(sourceText, options = {}) {
   const systemMembers = concreteSystems.flatMap(flattenMembers);
   const hosted = ['service', 'daemon'].includes(runtime.kind);
   const runtimeUnit = { kind: runtime.kind, id: runtime.id, refreshMs: runtime.interval || null };
+  for (const cache of cacheDeclarations) {
+    if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(cache.name) || cache.capacity < 1
+      || !Number.isSafeInteger(cache.ttlMs) || cache.ttlMs < 1)
+      throw new Error('[VBISH] PULSE CACHE requires a valid name, positive capacity, and positive interval');
+  }
+  for (const cache of virtualCacheDeclarations) {
+    if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(cache.name) || cache.sources.length < 1
+      || cache.sources.some(source => !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(source))
+      || !['RAM', 'FFS'].includes(cache.storage) || !['PERSISTENT', 'UPDATEABLE'].includes(cache.mode))
+      throw new Error('[VBISH] PULSE VIRTUAL CACHE requires a name and valid sources');
+  }
+  const cacheNames = [...cacheDeclarations, ...virtualCacheDeclarations].map(cache => cache.name);
+  if (new Set(cacheNames).size !== cacheNames.length) throw new Error('[VBISH] Cache names must be unique within a node');
   return {
     language: 'vbish',
     sourceLanguage: 'vbish',
@@ -283,6 +325,8 @@ export function compileVbishToPcode(sourceText, options = {}) {
       },
       entryLabel: 'MAIN'
       ,
+      ...(cacheDeclarations.length || virtualCacheDeclarations.length
+        ? { hostCaches: [...cacheDeclarations, ...virtualCacheDeclarations] } : {}),
       ...(hosted ? {
         ...createDotnetServiceContract({ id: runtime.id, endpoints: endpointDeclarations }),
         hostBindingsVersion: SERVICE_HOST_BINDINGS_VERSION,

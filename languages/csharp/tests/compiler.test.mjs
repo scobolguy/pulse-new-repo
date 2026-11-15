@@ -54,6 +54,22 @@ sealed class TemperatureService {
   });
   assert.equal(result.error ?? null, null);
 });
+
+test('C# cache attributes emit a typed schema with unique and latest constraints', () => {
+  const source = `[Cache("devices", Capacity = 50, TtlMs = 180000,
+  Fields = "id:string,observedAt:string", UniqueBy = "id", LatestBy = "observedAt")]
+sealed class DeviceCache {}
+class Program { static void Main() {} }`;
+  const artifact = compileCsharpToPcode(source);
+  assert.deepEqual(artifact.programMap.hostCaches, [{
+    name: 'devices', capacity: 50, ttlMs: 180000, storage: 'RAM', mode: 'PERSISTENT',
+    fields: [{ name: 'id', type: 'string' }, { name: 'observedAt', type: 'string' }],
+    uniqueBy: 'id', latestBy: 'observedAt'
+  }]);
+  assert.throws(() => compileCsharpToPcode(source.replace('LatestBy = "observedAt"', 'LatestBy = "missing"')),
+    /latestBy field 'missing' is not declared/);
+});
+
 async function run(source, options = {}) {
   const artifact = compileCsharpToPcode(source, { fileName: 'test.cs', ...options });
   const mappingsById = new Map();

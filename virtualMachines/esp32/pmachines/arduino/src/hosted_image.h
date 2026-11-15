@@ -4,6 +4,7 @@
 #include <ArduinoJson.h>
 #include <array>
 #include <cstdlib>
+#include <limits>
 #include <memory>
 #include <vector>
 #include <freertos/semphr.h>
@@ -22,11 +23,12 @@ public:
     struct CacheStats { size_t reservedBytes, pages; bool psram; };
     static CacheStats cacheStats();
 private:
-    static constexpr size_t PAGE_BYTES = 512, CACHE_PAGES = 4, MAX_PAGES = 256;
+    static constexpr size_t PAGE_BYTES = 512, CACHE_PAGES = 4;
+    static constexpr size_t INVALID_PAGE = std::numeric_limits<size_t>::max();
     struct Page {
         std::array<uint8_t, PAGE_BYTES> bytes{};
         HostedImage* owner = nullptr;
-        size_t number = MAX_PAGES;
+        size_t number = INVALID_PAGE;
         size_t length = 0;
         uint32_t age = 0;
     };

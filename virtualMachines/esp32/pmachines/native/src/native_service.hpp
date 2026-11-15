@@ -14,6 +14,7 @@ struct HttpRequest {
     std::string body;
     std::string peer;
     int peerPort = 0;
+    std::string query;
 };
 
 struct HttpResponse {
@@ -38,7 +39,8 @@ private:
 class NativeService {
 public:
     NativeService(std::string pcodeText, std::string programMapJson, uint64_t maxSteps,
-        std::map<std::string, StorageRootGrant> storageRoots = {}, uint64_t maxFileBytes = 262144);
+        std::map<std::string, StorageRootGrant> storageRoots = {}, uint64_t maxFileBytes = 262144,
+        std::string aggregatorUrl = {});
     HttpResponse dispatch(const HttpRequest& request) const;
     HttpResponse debugDispatch(std::istream& input, std::ostream& output) const;
     const std::string& serviceId() const;
@@ -52,6 +54,8 @@ private:
     uint64_t maxSteps_;
     std::map<std::string, StorageRootGrant> storageRoots_;
     uint64_t maxFileBytes_;
+    std::string aggregatorUrl_;
+    std::string bootId_;
 };
 
 std::string readFile(const std::string& path);

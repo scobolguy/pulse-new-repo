@@ -632,6 +632,7 @@ waitErrorClause
 
 timeUnit
     : {['ms', 's', 'm'].includes(this._input.LT(1).text.toLowerCase())}? IDENT
+    | 'ms'
     ;
 
 syncStmt

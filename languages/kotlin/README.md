@@ -18,14 +18,130 @@ exits, or provide exactly-once output. It does not execute on the ESP32.
 
 ### Kasa discovery
 
-The Pulse Kotlin service in `examples\kasa-discovery-daemon.kt` sends a Kasa
-probe using the generic UDP exchange binding. Call `/api/kasa/discover?ip=<address>`
-with a peer explicitly allowlisted at port 9999 in `networkPeers` when installing
-the hosted service. It probes one address per request and returns the raw response
-as hex; a timeout or denied peer is an error. It does not scan a subnet automatically.
-ESP32 no longer implements `host.kasa_discover`; applications using that
-binding must migrate to generic UDP. Its `networkDiscoveryStep()` now probes
-cameras only.
+The Pulse Kotlin [daemon](examples/kasa-discovery-daemon.kt) sends a read-only
+legacy Kasa UDP `get_sysinfo` broadcast at startup and every three minutes. It
+selects the active IPv4 interface whose broadcast address and port 9999 are
+explicitly allowed by `networkPeers`, then decrypts replies and stores up to
+50 devices in a typed cache. Observations expire after six minutes without a
+refresh. The accompanying [service](examples/kasa-device-service.kt) exposes
+`/api/devices/snapshot`, `/api/devices/names` and `/health` for the network
+cache and Pulse Studio. Malformed Kasa replies, failed requests and cache
+capacity errors are reported in daemon diagnostics; packet loss or a daemon
+failure marks the federated source incomplete until the collector is restarted.
+Only legacy rolling-XOR devices on the selected local subnet are supported;
+newer authenticated Kasa/Tapo protocols are not.
+
+The local JS network-cache deployment installs this collector automatically;
+set `PULSE_LAN_INTERFACE` to the active IPv4 address if interface selection is
+ambiguous. The JS collector buffers at most 50 in-flight or queued datagrams,
+reporting overflow as shed datagrams. Shared UDP binds do not guarantee that
+multiple collectors each receive unicast replies. An ESP32 bundle installer
+exists, but this periodic daemon has not yet been validated on ESP32.
+For an opt-in JS LAN test, set `PULSE_KASA_LAN_IP` to the interface address
+and run `node --test virtualMachines\esp32\testing\pmachines\kotlin-kasa-lan.test.mjs`
+from the repository root. Set `PULSE_KASA_CYCLES=2` to check a real five-minute
+refresh, or `PULSE_KASA_DEPLOYMENT=1` to also test the signed collector installer.
+
+The separate [single-address probe](examples/kasa-probe-service.kt) uses the
+generic UDP exchange binding and returns raw response hex from
+`/api/kasa/discover?ip=<address>`, with that IP and port explicitly allowed.
+ESP32 no longer implements `host.kasa_discover`; applications using it must
+migrate to generic UDP. `networkDiscoveryStep()` now probes cameras only.
+
+### Tapo camera discovery
+
+The Pulse Kotlin [camera daemon](examples/tapo-camera-discovery-daemon.kt)
+sends an ONVIF WS-Discovery Probe to `239.255.255.250:3702` and caches only
+ProbeMatches that advertise an HTTP(S) ONVIF device-service URL. The cached
+record includes the responding address, ONVIF service port, and full service
+URL; ordinary HTTP hosts are not treated as cameras. Create a Camera Account in
+the Tapo app under **Device Settings > Advanced Settings > Camera Account**
+before discovery, because many models do not expose ONVIF until the account is
+configured. The daemon refreshes every three minutes and expires observations
+after six minutes. Its [service](examples/tapo-camera-service.kt) exposes
+`/api/cameras/snapshot`, `/api/cameras/names`, and `/health`.
+
+### Typed cache declarations
+
+Kotlin cache declarations emit host metadata rather than adding P-machine
+instructions:
+
+```kotlin
+@Cache(
+  name = "devices",
+  capacity = 50,
+  ttlMs = 180000,
+  fields = "address:string,observedAt:string",
+  uniqueBy = "address",
+  latestBy = "observedAt"
+)
+class DeviceCache
+```
+
+Field types are `integer`, `string`, or `boolean`. `uniqueBy` rejects a live
+duplicate under another key. `latestBy` compares integers or fixed-width UTC
+timestamps (`YYYY-MM-DDTHH:mm:ss.sssZ`); an equal or older update returns 0 and
+does not refresh TTL. The host enforces these constraints atomically using the
+existing cache binding.
+
+Physical caches can also declare a read-only query and its result schema:
+
+```kotlin
+@Cache(
+  name = "devices",
+  capacity = 50,
+  ttlMs = 180000,
+  fields = "id:string,protocol:string",
+  query = "SELECT id, protocol FROM devices WHERE protocol = 'kasa' ORDER BY id LIMIT 10"
+)
+class KasaDevices
+```
+
+Virtual-cache sources may remain local names or use logical service references
+with SQL aliases, such as `kasa=kasa-device-service/devices`. A virtual query
+declares its output fields and can combine aliased sources with `UNION ALL`:
+
+```kotlin
+@VirtualCache(
+  name = "all-devices",
+  sources = "kasa=kasa-device-service/devices,tapo=tapo-camera-service/cameras",
+  fields = "source:string,sourceKey:string,details:string",
+  query = "SELECT 'kasa' AS source, cache_key AS sourceKey, device_json AS details FROM kasa UNION ALL SELECT 'tapo' AS source, cache_key AS sourceKey, device_json AS details FROM tapo"
+)
+class AllDevices
+```
+
+The compiler validates a portable read-only subset: projections, equality
+joins, `WHERE` comparisons joined by `AND`, `UNION ALL`, `ORDER BY`, and
+`LIMIT` (at most 1,000,000 rows). Queries must match their declared result
+schema and cannot contain writes, comments, or multiple statements. The
+JavaScript host executes these plans and resolves remote sources through
+Aggregator for each snapshot read. Standalone JavaScript nodes can configure
+that Aggregator with `--aggregator-url` or `JS_PMACHINE_AGGREGATOR_URL`;
+`JS_PMACHINE_BACKEND_URL` is used as a fallback.
+
+The portable Windows/Linux C++ host can also run Kotlin hosted services
+compiled with `--target native`. It supports read-only virtual caches whose
+sources are remote cache services, using `--aggregator-url` or
+`PULSE_AGGREGATOR_URL` when launching the native host. The native host does not
+yet provide local physical-cache storage or local virtual-cache sources; those
+source caches must be hosted by a runtime that provides cache storage. ESP32
+firmware support for distributed virtual-cache queries is not included. No
+Kotlin/JVM reflection is used.
+
+### Bluetooth discovery
+
+The [Bluetooth Kotlin daemon](examples/bluetooth-discovery-daemon.kt) uses the
+ESP32 NimBLE scanner through one bounded native host call, then stores and
+serves observations from a typed cache. It scans for three seconds every thirty
+seconds; entries expire after two minutes. Names containing `light`, `bulb`, or
+`lamp` are labeled `possible-light-bulb`, not confirmed bulbs, because BLE bulb
+advertisements are vendor-specific and no target models were provided. Discovery
+does not connect to devices or control them. Build the ESP32 image with the
+Bluetooth-enabled PMachine profile, then install the daemon with
+`node languages\kotlin\scripts\install-bluetooth-discovery-daemon.mjs http://ESP32-IP`.
+The [service](examples/bluetooth-device-service.kt) exposes
+`/api/bluetooth/devices` and `/health`.
 
 ### Conformance architecture
 

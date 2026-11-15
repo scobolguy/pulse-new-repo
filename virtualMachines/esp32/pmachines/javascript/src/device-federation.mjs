@@ -125,14 +125,15 @@ export function createDeviceFederation({
   }
   function validateRecord(state, record, page) {
     const device = record?.device;
+    const maxTtl = state.config.protocol === 'kasa' ? 360000 : 180000;
     if (!record || Object.keys(record).sort().join(',') !== 'device,key,observationMs,observationSequence,remainingTTLms' ||
         !device || Object.keys(device).sort().join(',') !== 'address,deviceType,name,protocol' ||
         device.protocol !== state.config.protocol || !boundedText(device.name, 256) ||
         !boundedText(device.deviceType, 64) || net.isIP(device.address) !== 4 ||
         !boundedText(record.key, 256) || !integer(record.observationMs, 0, page.sampledAtMs) ||
         !integer(record.observationSequence, 1, Number.MAX_SAFE_INTEGER) ||
-        !integer(record.remainingTTLms, 1, 180000) ||
-        page.sampledAtMs - record.observationMs + record.remainingTTLms > 180000) fail('Invalid typed device/observation schema');
+        !integer(record.remainingTTLms, 1, maxTtl) ||
+        page.sampledAtMs - record.observationMs + record.remainingTTLms > maxTtl) fail('Invalid typed device/observation schema');
     const keyPattern = device.protocol === 'pulse' ? /^[^\s]{1,256}$/ :
       device.protocol === 'kasa' ? /^kasa:(\d{1,3}\.){3}\d{1,3}$/ :
       device.protocol === 'tuya' ? /^tuya:[a-zA-Z0-9_-]{6,64}$/ :
@@ -202,7 +203,11 @@ export function createDeviceFederation({
           [key, { device: entry.device, observationSequence: entry.observationSequence, deadline: entry.deadline }]))), 0);
       if (bytes > maxEvidenceBytes) fail('Evidence storage byte limit exceeded');
       if (new Set(candidateStates.flatMap(entries => [...entries.keys()])).size > maxDevices) fail('Combined device capacity exceeded');
-      const error = after.daemons.map(daemon => daemon.lastError).filter(Boolean).join('; ').slice(0, 160);
+      let error = after.daemons.map(daemon => daemon.lastError).filter(Boolean).join('; ').slice(0, 160);
+      if (!error && state.config.protocol === 'kasa' && after.daemons.some(daemon =>
+        daemon.failures > 0 || daemon.droppedDatagrams > 0 || daemon.shedDatagrams > 0)) {
+        error = 'Kasa discovery has failed or lost datagrams since collector start';
+      }
       if (state.bootId && state.bootId !== completed.first.bootId) {
         state.retiredBootIds.push(state.bootId);
         if (state.retiredBootIds.length > 8) state.retiredBootIds.shift();

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
 import { compilePascalishProgramWithAntlr } from '../../aggregator/scripts/compile-pascalish-program-antlr-to-pcode.mjs';
 import { attachPcodeSignature } from '../../aggregator/scripts/pcode-signing.mjs';
+import { compileKasaCollector } from '../../../../languages/kotlin/src/kasa-artifacts.mjs';
 
 const root = new URL('../../', import.meta.url);
 export async function installNetworkCollectors({
@@ -20,11 +21,6 @@ const origin = new URL(target);
 if (!['http:', 'https:'].includes(origin.protocol) || origin.pathname !== '/' || origin.search || origin.hash) {
   throw new Error('JS PMachine URL must be an HTTP(S) origin');
 }
-const peers = config.kasaPeers;
-if (!Array.isArray(peers) || peers.length < 1 || peers.length > 8 ||
-    new Set(peers).size !== peers.length || peers.some(ip => net.isIP(ip) !== 4)) {
-  throw new Error('Kasa configuration must contain 1..8 distinct literal IPv4 peers');
-}
 const interfaces = Object.values(os.networkInterfaces()).flat().filter(item => item.family === 'IPv4' && !item.internal);
 const esp32 = new URL(config.esp32Origin);
 const matchingInterfaces = interfaces.filter(item =>
@@ -34,6 +30,11 @@ const lanInterface = process.env.PULSE_LAN_INTERFACE || config.lanInterface
 if (net.isIP(lanInterface) !== 4 || !interfaces.some(item => item.address === lanInterface)) {
   throw new Error('Configure one active IPv4 lanInterface or PULSE_LAN_INTERFACE for SSDP multicast');
 }
+const lan = interfaces.find(item => item.address === lanInterface);
+if (net.isIP(lan.netmask) !== 4) throw new Error('Selected LAN interface has no IPv4 netmask');
+const ipParts = lan.address.split('.').map(Number), maskParts = lan.netmask.split('.').map(Number);
+const broadcast = ipParts.map((part, index) => (part & maskParts[index]) | (255 ^ maskParts[index])).join('.');
+if (broadcast === lan.address) throw new Error('Selected LAN interface has no usable broadcast address');
 const httpPorts = {
   kasa: Number(process.env.PULSE_KASA_HTTP_PORT || config.kasaHttpPort || 4309),
   tuya: config.tuyaHttpPort,
@@ -79,25 +80,16 @@ async function upload(id, unit) {
 }
 
 const service = signed(await compileSource('device-cache-service.pas'));
+const kasa = await compileKasaCollector('js');
+const kasaService = signed(kasa.service);
 const installed = [];
 try {
   const definitions = [];
-  const kasaPath = sourcePath('kasa-collector-daemon.pas');
-  let kasaSource = await fs.readFile(kasaPath, 'utf8');
-  const selection = "address := '192.168.2.28';\n  if turn - (turn / 2) * 2 = 1 then address := '192.168.2.29';";
-  if (!kasaSource.includes(selection)) throw new Error('Kasa daemon is missing peer selection template');
-  kasaSource = kasaSource.replace(selection, [
-    `address := '${peers[0]}';`,
-    ...peers.slice(1).map((ip, index) =>
-      `  if turn - (turn / ${peers.length}) * ${peers.length} = ${index + 1} then address := '${ip}';`)
-  ].join('\n'));
-  // Keep every peer fresh within the 180-second observation TTL, even with eight peers.
-  kasaSource = kasaSource.replace('refresh 30000 ms', `refresh ${Math.min(30000, Math.floor(90000 / peers.length))} ms`);
   definitions.push({
     id: `kasa-js${collectorSuffix}`,
     port: httpPorts.kasa,
-    networkPeers: JSON.stringify(peers.map(ip => ({ ip, port: 9999 }))),
-    daemon: signed(await compileSource('kasa-collector-daemon.pas', kasaSource))
+    networkPeers: JSON.stringify([{ ip: broadcast, port: 9999 }]),
+    daemon: signed(kasa.daemon), udpPort: 9999, udpBindAddress: lanInterface, udpShared: true, udpQueueLimit: 50
   });
   for (const protocol of ['tuya', 'ssdp']) {
     definitions.push({
@@ -122,6 +114,7 @@ try {
   }
 
   const serviceFiles = await upload('device-cache-service', service);
+  const kasaServiceFiles = await upload('kasa-device-service', kasaService);
   for (const definition of definitions) {
     const daemonFiles = await upload(definition.id, definition.daemon);
     const daemon = {
@@ -129,8 +122,9 @@ try {
       map: daemonFiles.map,
       ...(definition.udpPort ? {
         udpPort: definition.udpPort,
-        udpBindAddress: '0.0.0.0',
+        udpBindAddress: definition.udpBindAddress || '0.0.0.0',
         ...(definition.udpShared ? { udpShared: true } : {}),
+        ...(definition.udpQueueLimit ? { udpQueueLimit: definition.udpQueueLimit } : {}),
         ...(definition.multicastGroup ? { multicastGroup: definition.multicastGroup } : {}),
         ...(definition.multicastInterface ? { multicastInterface: definition.multicastInterface } : {})
       } : {})
@@ -144,8 +138,8 @@ try {
         udpBindAddress: '0.0.0.0', udpShared: true });
     }
     const status = JSON.parse(await request('/pmachine/service_host/install', {
-      serviceFile: serviceFiles.file,
-      serviceMap: serviceFiles.map,
+      serviceFile: (definition.id === `kasa-js${collectorSuffix}` ? kasaServiceFiles : serviceFiles).file,
+      serviceMap: (definition.id === `kasa-js${collectorSuffix}` ? kasaServiceFiles : serviceFiles).map,
       collectorId: definition.id,
       additional: 'true',
       httpPort: String(definition.port),

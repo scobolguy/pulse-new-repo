@@ -115,5 +115,23 @@ export function createPmachineBundleStore(root, {
     return { ...manifest, directory };
   }
 
-  return { install, read };
+  async function remove(name) {
+    const safeProgramName = safeName(name, 'program name');
+    const directory = path.join(programs, safeProgramName);
+    await fs.rm(directory, { recursive: true, force: false });
+    return { name: safeProgramName, removed: true };
+  }
+
+  async function list() {
+    let entries;
+    try {
+      entries = await fs.readdir(programs, { withFileTypes: true });
+    } catch (error) {
+      if (error?.code === 'ENOENT') return [];
+      throw error;
+    }
+    return Promise.all(entries.filter(entry => entry.isDirectory()).map(entry => read(entry.name)));
+  }
+
+  return { install, read, remove, list };
 }

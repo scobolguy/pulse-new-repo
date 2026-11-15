@@ -2,6 +2,7 @@
 #if defined(ESP32)
 #include "pmachine.h"
 #include <ArduinoJson.h>
+#include <WiFiUdp.h>
 #include <array>
 #include "byte_buffer.h"
 
@@ -10,7 +11,7 @@ class NetworkBindings {
 public:
     static std::string eventBytes(const std::string& body);
     bool invoke(const std::string& operation, const std::vector<HostValue>& args,
-                HostValue& result, std::string& error);
+                HostValue& result, std::string& error, WiFiUDP* ownedUdp = nullptr);
     struct Exchange {
         bool tcp = false, ok = false;
         const char* phase = "idle";

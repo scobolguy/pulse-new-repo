@@ -53,6 +53,23 @@ function writeJsonResponse(response, status, value) {
   }).end(body);
 }
 
+export function createAggregatorCacheSourceResolver({ aggregatorUrl, fetchImpl = fetch }) {
+  let base;
+  try { base = new URL(aggregatorUrl); } catch { throw new Error('Invalid cache Aggregator URL'); }
+  if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password || base.hash
+    || typeof fetchImpl !== 'function') throw new Error('Invalid cache Aggregator resolver configuration');
+  return async (serviceId, cacheName) => {
+    const url = new URL(`/api/cache-services/${encodeURIComponent(serviceId)}/caches/${encodeURIComponent(cacheName)}/snapshot`,
+      base.origin);
+    const response = await fetchImpl(url, { signal: AbortSignal.timeout(3000) });
+    if (!response.ok) throw new Error(`Cache Aggregator resolution returned HTTP ${response.status}`);
+    const value = await response.json();
+    if (value?.serviceId !== serviceId || value?.cacheName !== cacheName
+      || typeof value.snapshotUrl !== 'string') throw new Error('Invalid Cache Aggregator resolution response');
+    return { snapshotUrl: value.snapshotUrl, instanceId: value.instanceId || '' };
+  };
+}
+
 export async function createPascalishServiceHost({
   compiled, daemons = [], collectorId, bindings = {}, networkPeers = [], httpAllowedPeers = [],
   host = '127.0.0.1', httpPort = 4300, udpPort = 4210, sharedHttpListener = null,
@@ -62,7 +79,8 @@ export async function createPascalishServiceHost({
   onDaemonEvent = null, storageRoots = {}, maxFileBytes = 262144, desktopBudget = false,
   distributedBindings = {}, bluetoothSourceFactory = null, filesystemBindingOverrides = {},
   processBindings = {},
-  lifecycle = undefined, infrastructureProbe = null, inventoryGrant = null, scheduler = null
+  lifecycle = undefined, infrastructureProbe = null, inventoryGrant = null, scheduler = null,
+  cacheSourceResolver = null
 }) {
   if (scheduler !== null && !(scheduler instanceof PMachineScheduler)) throw failure('Invalid pmachine scheduler');
   if (compiled?.programMap?.hostBindingsVersion !== SERVICE_HOST_BINDINGS_VERSION
@@ -85,6 +103,8 @@ export async function createPascalishServiceHost({
         || typeof handler !== 'function')) {
     throw failure('Invalid process binding overrides');
   }
+  if (cacheSourceResolver !== null && typeof cacheSourceResolver !== 'function')
+    throw failure('Invalid cache source resolver');
   text(collectorId, 'collectorId');
   if (infrastructureProbe !== null && typeof infrastructureProbe !== 'function') {
     throw failure('Invalid infrastructure probe primitive');
@@ -165,6 +185,8 @@ export async function createPascalishServiceHost({
     const multicastInterface = entry?.compiled ? entry.multicastInterface ?? '' : '';
     const udpBindAddress = entry?.compiled ? entry.udpBindAddress ?? host : host;
     const udpShared = entry?.compiled ? entry.udpShared ?? false : false;
+    const udpQueueLimit = entry?.compiled ? entry.udpQueueLimit ?? 1 : 1;
+    integer(udpQueueLimit, 1, 50, 'daemon UDP queue limit');
     if (net.isIP(udpBindAddress) !== 4) throw failure('Invalid daemon UDP bind address');
     if (typeof udpShared !== 'boolean' || (udpShared && daemonUdpPort === null)) throw failure('Invalid daemon udpShared or missing UDP port');
     if (daemonUdpPort !== null) integer(daemonUdpPort, 0, 65535, 'daemon UDP port');
@@ -187,11 +209,13 @@ export async function createPascalishServiceHost({
       if (serviceDefinition.backingTable !== definition.backingTable) throw failure('Daemon backing table must match service cache');
     }
     const id = text(map.runtimeUnit.id, 'daemon ID');
-    const interval = integer(map.runtimeUnit.refreshMs, 10, 180000, 'daemon interval');
+    const interval = integer(map.runtimeUnit.refreshMs, 10, 300000, 'daemon interval');
     if (units.has(id) || units.size >= maxTimers) throw failure('Duplicate daemon or daemon capacity exceeded');
     units.set(id, {
-      id, instructions: parsePcode(daemon.pcodeText), mappingsById: parseProgramMapMappings(map), interval,
-      udpPort: daemonUdpPort, udpBindAddress, udpShared, multicastGroup, multicastInterface, socket: null, udpBusy: false,
+      id, sourceLanguage: map.sourceLanguage || 'unknown',
+      instructions: parsePcode(daemon.pcodeText), mappingsById: parseProgramMapMappings(map), interval,
+      udpPort: daemonUdpPort, udpBindAddress, udpShared, udpQueueLimit, multicastGroup, multicastInterface,
+      socket: null, udpBusy: false,
       stats: { timerRuns: 0, udpEvents: 0, failures: 0, droppedDatagrams: 0, shedDatagrams: 0, lastError: '' }
     });
   }
@@ -233,6 +257,15 @@ export async function createPascalishServiceHost({
   const cacheDefinitions = compiled.programMap.hostCaches || [];
   createHostCacheStore(cacheDefinitions, { clock: () => now() });
   const cacheStore = createHostCacheStore(cacheDefinitions.filter(definition => !definition.backingTable), { clock: () => now() });
+  async function cacheSnapshot(name, cursor, revision, pageSize = 2) {
+    const page = await cacheStore.snapshotAsync(name, cursor, revision, {
+      resolveSource: cacheSourceResolver, pageSize
+    });
+    const payload = { ...page, complete: page.complete !== false, errors: page.errors || [], collectorId, bootId };
+    const json = JSON.stringify(payload);
+    if (Buffer.byteLength(json) > 2048) throw failure('Snapshot page exceeds 2048 bytes', 503);
+    return payload;
+  }
   const replicas = new Map();
   const distributedDefinitions = new Map((compiled.programMap.distributedTables || []).map(definition => {
     const schema = tableSchema(definition);
@@ -353,6 +386,17 @@ export async function createPascalishServiceHost({
           error: 'Service dependencies are not ready', ...lifecycleRuntime.getReadiness(),
         } };
       }
+      const cacheSnapshotMatch = event.transport === 'http' && event.method === 'GET'
+        ? /^\/api\/hosted\/caches\/([A-Za-z][A-Za-z0-9_-]{0,63})\/snapshot$/.exec(event.path) : null;
+      if (cacheSnapshotMatch) {
+        try {
+          return { status: 200, body: await cacheSnapshot(cacheSnapshotMatch[1],
+            event.query?.cursor || '', event.query?.revision || '', 2) };
+        } catch (error) {
+          const status = /revision changed/i.test(error.message) ? 409 : error.status || 503;
+          return { status, body: { error: error.message } };
+        }
+      }
       let status = 200;
       const endpoints = compiled.programMap.serviceEndpoints || [];
       const routeExternalRequest = event.transport === 'http' || !unit;
@@ -412,6 +456,8 @@ export async function createPascalishServiceHost({
         'host.json_has': (json, key) => Object.hasOwn(objectJson(json), text(key, 'JSON key')) ? 1 : 0,
         'host.capabilities': () => JSON.stringify(capabilities),
         ...networkBindings,
+        'host.udp_send': (ip, port, hex, { signal }) =>
+          networkBindings['host.udp_send'](ip, port, hex, { socket: unit?.socket, signal }),
         ...byteBindings,
         ...createBoundedTextBindings(),
         'host.json_path_text': (json, path) => jsonPath(json, path, 'string'),
@@ -437,12 +483,8 @@ export async function createPascalishServiceHost({
         'host.replica_next': (name, cursor) => replica(name).next(cursor),
         'host.replica_count': name => replica(name).count(),
         'host.replica_clearlocal': name => replica(name).clearLocal(),
-        'host.cache_snapshot': (name, cursor, revision) => {
-          const page = { ...cacheStore.snapshot(name, cursor, revision), collectorId, bootId };
-          const json = JSON.stringify(page);
-          if (Buffer.byteLength(json) > 2048) throw failure('Snapshot page exceeds 2048 bytes', 503);
-          return json;
-        },
+        'host.cache_snapshot': async (name, cursor, revision) =>
+          JSON.stringify(await cacheSnapshot(name, cursor, revision, 2)),
         'host.raise_error': (message) => { throw failure(`Program failure: ${text(message, 'failure message')}`, 500); },
         'host.json_append': (json, key, value) => {
           const object = objectJson(json);
@@ -591,14 +633,26 @@ export async function createPascalishServiceHost({
     // Shared intakes (e.g. Pulse discovery on 4210) receive broadcasts alongside other listeners on the port.
     const daemonSocket = dgram.createSocket({ type: 'udp4', reuseAddr: unit.udpShared });
     unit.socket = daemonSocket;
-    // At most one datagram per daemon is queued; extra or oversized datagrams are counted, not buffered.
+    const queue = [];
+    function drain() {
+      if (closed || unit.udpBusy || queue.length === 0) return;
+      const { data, peer } = queue.shift();
+      unit.udpBusy = true;
+      runDaemon(unit, { transport: 'udp', method: 'UDP', path: '/daemon/udp', body: data.toString('utf8'),
+        bytes: data, peer: peer.address, port: peer.port }).finally(() => {
+        unit.udpBusy = false;
+        drain();
+      });
+    }
     daemonSocket.on('message', (data, peer) => {
       if (closed) return;
       if (data.length > maxDaemonDatagramBytes) { unit.stats.droppedDatagrams += 1; return; }
-      if (unit.udpBusy) { unit.stats.shedDatagrams += 1; return; }
-      unit.udpBusy = true;
-      runDaemon(unit, { transport: 'udp', method: 'UDP', path: '/daemon/udp', body: data.toString('utf8'), bytes: data, peer: peer.address, port: peer.port })
-        .finally(() => { unit.udpBusy = false; });
+      if (queue.length + (unit.udpBusy ? 1 : 0) >= unit.udpQueueLimit) {
+        unit.stats.shedDatagrams += 1;
+        return;
+      }
+      queue.push({ data, peer });
+      drain();
     });
     await new Promise((resolve, reject) => {
       daemonSocket.once('error', reject);
@@ -842,7 +896,7 @@ export async function createPascalishServiceHost({
       cache: cacheStore.stats(),
       replicas: [...replicas.values()].map(replica => replica.status()),
       daemonDiagnostics: [...units.values()].map(unit => ({
-        id: unit.id, intervalMs: unit.interval,
+        id: unit.id, sourceLanguage: unit.sourceLanguage, intervalMs: unit.interval,
         udpPort: running && unit.socket ? unit.socket.address().port : null, udpShared: unit.udpShared,
         ...(unit.multicastGroup ? { multicastGroup: unit.multicastGroup, multicastInterface: unit.multicastInterface } : {}), ...unit.stats
       })) })

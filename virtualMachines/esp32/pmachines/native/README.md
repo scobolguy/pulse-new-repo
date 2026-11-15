@@ -72,6 +72,16 @@ host capabilities are not advertised or silently emulated.
 The listener is serial and accepts HTTP/1.x requests with a bounded
 `Content-Length`; chunked transfer encoding is not supported.
 
+Kotlin hosted services can target this Windows/Linux executable with
+`--target native`. The native host serves remote-source virtual-cache snapshots
+at `/api/hosted/caches/{cacheName}/snapshot` and resolves every logical source
+through Aggregator on each read. Configure the Aggregator with
+`--aggregator-url http://aggregator:4000` or `PULSE_AGGREGATOR_URL`. This
+runtime currently has no local physical-cache store, so virtual-cache sources
+must be hosted by a cache-capable runtime such as the JavaScript host. Native
+source requests currently use plain HTTP with Content-Length responses; HTTPS
+and chunked response bodies are not supported.
+
 Desktop execution is unbounded by default, matching the existing desktop
 contract. Supply `--max-steps N` for an explicit instruction budget; SIGINT or
 SIGTERM cancels execution and stops the host. The HTTP listener binds to

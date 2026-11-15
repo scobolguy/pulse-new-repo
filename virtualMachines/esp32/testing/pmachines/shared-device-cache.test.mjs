@@ -10,6 +10,7 @@ import { createHostCacheStore } from '../../pmachines/javascript/src/host-cache.
 import { createNetworkBindings } from '../../pmachines/javascript/src/network-bindings.mjs';
 import { compactServiceHostProgramMap } from '../../pmachines/shared/contracts/service-host-bindings.mjs';
 import { encodeHostedImage } from '../../pmachines/shared/contracts/hosted-image.mjs';
+import { parseCacheQuery } from '../../../../languages/dotnet/cache-query.mjs';
 
 const read = name => fs.readFile(new URL(`../../src/${name}`, import.meta.url), 'utf8');
 const compileUnit = text => compilePascalishProgramWithAntlr(text, { hostServices: true });
@@ -108,9 +109,10 @@ async function until(predicate, ms = 4000) {
 
 test('shared device units fit signed images and declare one identical typed cache', () => {
   for (const unit of [service, kasa, tuya, ssdp]) {
-    assert.ok(Number.parseInt(encodeHostedImage(unit.pcodeText).slice(4, 12), 16) <= 512);
+    assert.ok(Number.parseInt(encodeHostedImage(unit.pcodeText).slice(4, 12), 16) > 0);
     assert.deepEqual(compactServiceHostProgramMap(unit.programMap).hostCaches, service.programMap.hostCaches);
   }
+  assert.ok(Number.parseInt(encodeHostedImage(ssdp.pcodeText).slice(4, 12), 16) > 512);
   assert.deepEqual(service.programMap.hostCaches, [{ name: 'devices', capacity: 50, fields: [
     { name: 'name', type: 'string' }, { name: 'protocol', type: 'string' },
     { name: 'address', type: 'string' }, { name: 'deviceType', type: 'string' }] }]);
@@ -136,6 +138,173 @@ test('typed enumeration is bytewise ordered, pinned to reads and preserves evict
   assert.throws(() => store.next('devices', 'x'.repeat(257), time), /cursor/i);
 });
 
+test('physical cache SQL filters, sorts, projects and pages typed snapshot rows', () => {
+  let time = 100;
+  const fields = [{ name: 'id', type: 'string' }, { name: 'protocol', type: 'string' }];
+  const viewFields = [...fields];
+  const queryPlan = parseCacheQuery(
+    "SELECT id, protocol FROM devices WHERE protocol = 'kasa' ORDER BY id",
+    { cacheName: 'devices', fields, viewFields });
+  const store = createHostCacheStore([{
+    name: 'devices', capacity: 50, fields, viewFields, queryPlan
+  }], { clock: () => time });
+  store.put('devices', 'kasa-b', JSON.stringify({ id: 'b', protocol: 'kasa' }), 1000);
+  store.put('devices', 'tuya-a', JSON.stringify({ id: 'a', protocol: 'tuya' }), 1000);
+  store.put('devices', 'kasa-a', JSON.stringify({ id: 'a', protocol: 'kasa' }), 500);
+
+  const first = store.snapshot('devices');
+  assert.equal(first.total, 2);
+  assert.equal(first.records.length, 2);
+  assert.deepEqual(first.records.map(record => record.device), [
+    { id: 'a', protocol: 'kasa' }, { id: 'b', protocol: 'kasa' }
+  ]);
+  assert.ok(first.records.every(record => record.remainingTTLms === 500 || record.remainingTTLms === 1000));
+  assert.equal(first.nextCursor, '');
+  time += 250;
+  store.put('devices', 'kasa-a', JSON.stringify({ id: 'a', protocol: 'kasa' }), 500);
+  assert.throws(() => store.snapshot('devices', first.records[0].key, first.revision), /revision changed/);
+});
+
+test('virtual cache SQL unions local source snapshots with source freshness preserved', () => {
+  let time = 100;
+  const fields = [{ name: 'id', type: 'string' }];
+  const viewFields = [
+    { name: 'source', type: 'string' }, { name: 'sourceKey', type: 'string' },
+    { name: 'details', type: 'string' }
+  ];
+  const sources = [
+    { alias: 'leftSource', local: true, cacheName: 'left-cache' },
+    { alias: 'rightSource', local: true, cacheName: 'right-cache' }
+  ];
+  const queryPlan = parseCacheQuery(
+    "SELECT 'left' AS source, cache_key AS sourceKey, device_json AS details FROM leftSource UNION ALL SELECT 'right' AS source, cache_key AS sourceKey, device_json AS details FROM rightSource",
+    { cacheName: 'combined', fields: [], viewFields, virtual: true, sources });
+  const store = createHostCacheStore([
+    { name: 'left-cache', capacity: 50, fields },
+    { name: 'right-cache', capacity: 50, fields },
+    { name: 'combined', capacity: 50, fields: viewFields, virtual: true,
+      sources: ['left-cache', 'right-cache'], sourceDefinitions: sources, queryPlan }
+  ], { clock: () => time });
+  store.put('left-cache', 'left-1', JSON.stringify({ id: 'one' }), 1000);
+  store.put('right-cache', 'right-1', JSON.stringify({ id: 'two' }), 700);
+  const page = store.snapshot('combined');
+
+  assert.equal(page.total, 2);
+  assert.deepEqual(page.records.map(record => record.device.source), ['left', 'right']);
+  assert.deepEqual(page.records.map(record => record.remainingTTLms), [1000, 700]);
+});
+
+test('remote virtual cache resolves each logical source on every revision-fenced read', async () => {
+  let time = 100;
+  let resolutions = 0;
+  let requests = 0;
+  const source = { alias: 'kasa', serviceId: 'kasa-device-service', cacheName: 'devices' };
+  const fields = [
+    { name: 'source', type: 'string' }, { name: 'sourceKey', type: 'string' },
+    { name: 'details', type: 'string' }
+  ];
+  const queryPlan = parseCacheQuery(
+    "SELECT 'kasa' AS source, cache_key AS sourceKey, device_json AS details FROM kasa",
+    { cacheName: 'all-devices', fields: [], viewFields: fields, virtual: true, sources: [source] });
+  const store = createHostCacheStore([{
+    name: 'all-devices', capacity: 50, fields, virtual: true,
+    sources: ['kasa=kasa-device-service/devices'], sourceDefinitions: [source], queryPlan
+  }], { clock: () => time });
+  const sourceRecords = Array.from({ length: 3 }, (_, index) => ({
+    key: `device-${index}`, device: { id: index }, observationMs: 90 + index,
+    observationSequence: index + 1, remainingTTLms: 500 - index
+  }));
+  const resolveSource = async (serviceId, cacheName) => {
+    resolutions += 1;
+    assert.deepEqual([serviceId, cacheName], ['kasa-device-service', 'devices']);
+    return { snapshotUrl: 'http://source.test/api/hosted/caches/devices/snapshot', instanceId: 'node-a' };
+  };
+  const fetchImpl = async target => {
+    requests += 1;
+    const url = new URL(target);
+    const cursor = url.searchParams.get('cursor') || '';
+    const revision = url.searchParams.get('revision') || '';
+    if (cursor) assert.equal(revision, '7');
+    const start = cursor ? sourceRecords.findIndex(record => record.key === cursor) + 1 : 0;
+    const records = sourceRecords.slice(start, start + 2);
+    const nextCursor = start + records.length < sourceRecords.length ? records.at(-1).key : '';
+    return { ok: true, status: 200, text: async () => JSON.stringify({
+      version: 1, revision: '7', sequence: 7, sampledAtMs: time, total: sourceRecords.length,
+      records, nextCursor, collectorId: 'collector-a', bootId: 'boot-a', complete: true, errors: []
+    }) };
+  };
+
+  const first = await store.snapshotAsync('all-devices', '', '', { resolveSource, fetchImpl });
+  const second = await store.snapshotAsync('all-devices', first.nextCursor, first.revision,
+    { resolveSource, fetchImpl });
+
+  assert.equal(first.complete, true);
+  assert.equal(first.total, 3);
+  assert.deepEqual([...first.records, ...second.records].map(record => record.device.sourceKey),
+    ['device-0', 'device-1', 'device-2']);
+  assert.equal(resolutions, 2, 'Aggregator is consulted again for the next page');
+  assert.equal(requests, 4, 'each virtual page reads all revision-fenced source pages');
+});
+
+test('remote virtual cache returns partial rows with explicit source errors', async () => {
+  const sources = [
+    { alias: 'available', serviceId: 'available-service', cacheName: 'devices' },
+    { alias: 'offline', serviceId: 'offline-service', cacheName: 'devices' }
+  ];
+  const fields = [{ name: 'sourceKey', type: 'string' }];
+  const queryPlan = parseCacheQuery(
+    'SELECT cache_key AS sourceKey FROM available UNION ALL SELECT cache_key AS sourceKey FROM offline',
+    { cacheName: 'partial', fields: [], viewFields: fields, virtual: true, sources });
+  const store = createHostCacheStore([{
+    name: 'partial', capacity: 50, fields, virtual: true,
+    sources: ['available=available-service/devices', 'offline=offline-service/devices'],
+    sourceDefinitions: sources, queryPlan
+  }], { clock: () => 100 });
+  const page = await store.snapshotAsync('partial', '', '', {
+    resolveSource: async serviceId => ({ snapshotUrl: `http://${serviceId}/snapshot` }),
+    fetchImpl: async target => {
+      if (new URL(target).hostname === 'offline-service')
+        return { ok: false, status: 503, text: async () => '{"error":"offline"}' };
+      return { ok: true, status: 200, text: async () => JSON.stringify({
+        version: 1, revision: '2', sequence: 2, sampledAtMs: 100, total: 1,
+        records: [{ key: 'one', device: { id: 'one' }, observationMs: 80,
+          observationSequence: 1, remainingTTLms: 300 }],
+        nextCursor: '', collectorId: 'collector-a', bootId: 'boot-a', complete: true, errors: []
+      }) };
+    }
+  });
+
+  assert.equal(page.complete, false);
+  assert.equal(page.records.length, 1);
+  assert.equal(page.records[0].device.sourceKey, 'one');
+  assert.equal(page.errors.length, 1);
+  assert.equal(page.errors[0].alias, 'offline');
+});
+
+test('unique and latest cache constraints reject collisions and ignore stale writes', () => {
+  let time = 10;
+  const definition = {
+    name: 'devices', capacity: 50, uniqueBy: 'id', latestBy: 'observedAt',
+    fields: [{ name: 'id', type: 'string' }, { name: 'observedAt', type: 'string' }, { name: 'name', type: 'string' }]
+  };
+  const store = createHostCacheStore([definition], { clock: () => time });
+  const item = (observedAt, name) => JSON.stringify({ id: 'camera-1', observedAt, name });
+  store.put('devices', 'camera-key', item('2025-03-01T10:00:00.000Z', 'old'), 100);
+  assert.equal(store.put('devices', 'camera-key', item('2025-02-28T10:00:00.000Z', 'stale'), 200), 0);
+  assert.equal(store.put('devices', 'camera-key', item('2025-03-01T10:00:00.000Z', 'tie'), 200), 0);
+  assert.deepEqual(JSON.parse(store.get('devices', 'camera-key')), {
+    id: 'camera-1', observedAt: '2025-03-01T10:00:00.000Z', name: 'old'
+  });
+  assert.throws(() => store.put('devices', 'duplicate-key', item('2025-03-02T10:00:00.000Z', 'duplicate'), 100), /uniqueBy/);
+  assert.equal(store.put('devices', 'camera-key', item('2025-03-02T10:00:00.000Z', 'new'), 100), 1);
+  assert.equal(JSON.parse(store.get('devices', 'camera-key')).name, 'new');
+  assert.throws(() => store.put('devices', 'camera-key', item('2025-03-02T10:00:00Z', 'invalid'), 100), /ISO-8601/);
+  const booleanTimestamp = { ...definition, fields: [...definition.fields, { name: 'flag', type: 'boolean' }], latestBy: 'flag' };
+  assert.throws(() => createHostCacheStore([{
+    ...booleanTimestamp
+  }], { clock: () => time }), /Invalid hosted cache declaration/);
+});
+
 test('service returns every one of 50 cached names at the capacity boundary across bounded pages', async t => {
   const filler = compileUnit(await fs.readFile(new URL('./fixtures/device-cache-filler-daemon.pas', import.meta.url), 'utf8'));
   assert.ok(Number.parseInt(encodeHostedImage(filler.pcodeText).slice(4, 12), 16) <= 512);
@@ -146,6 +315,13 @@ test('service returns every one of 50 cached names at the capacity boundary acro
   assert.equal(host.getStatus().daemonDiagnostics[0].failures, 0);
   assert.equal(host.getStatus().daemonDiagnostics[0].timerRuns, 1,
     'startup completes all 75 writes before the paged client reads the stable cache');
+  const snapshot = await host.dispatch({ transport: 'http', method: 'GET',
+    path: '/api/hosted/caches/devices/snapshot', body: '', query: {} });
+  assert.equal(snapshot.status, 200);
+  assert.equal(snapshot.body.version, 1);
+  assert.equal(snapshot.body.complete, true);
+  assert.equal(snapshot.body.collectorId, 'names-50');
+  assert.equal(snapshot.body.records.length, 2);
   const result = await names(host);
   assert.equal(result.status, 200);
   assert.equal(result.body.count, 50);

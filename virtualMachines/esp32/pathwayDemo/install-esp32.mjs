@@ -50,7 +50,7 @@ export async function installStockService(config, { inventory = false } = {}) {
   const artifacts = await buildArtifacts(config);
   const uploads = [];
   for (const [label, artifact] of [['service', artifacts[inventory ? 'inventory-native-server' : 'stock-service']], ['daemon', artifacts['maintenance-daemon']]]) {
-    const profile = inventory && label === 'service' ? 'extended' : 'bounded';
+    const profile = 'storage-backed';
     const image = encodeHostedImage(artifact.pcodeText, { profile });
     const map = attachPcodeSignature({ ...compactServiceHostProgramMap(artifact.programMap),
       hostImageFormat: 'PHI1', hostImageProfile: profile, hostImageResident: true }, image);

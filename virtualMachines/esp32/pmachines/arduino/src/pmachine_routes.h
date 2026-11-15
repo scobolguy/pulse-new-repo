@@ -16,7 +16,8 @@ PMachineFileExecutionResult executePMachineFile(
 	const String& programMap,
 	const String& inputQueue = "",
 	const String& message = "",
-	size_t maxBytes = 65536
+	size_t maxBytes = 65536,
+	JsonVariantConst networkPeers = JsonVariantConst()
 );
 
 void registerPMachineRoutes(

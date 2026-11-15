@@ -95,6 +95,30 @@ test('Pulse health uses daemon diagnostics when the status daemon field is a cou
   assert.equal(source.error, '');
 });
 
+test('Kasa observations survive a five-minute scan interval without extending other protocols', async () => {
+  const f = fixture(['kasa', 'tuya']);
+  f.put(0, 1, 'Kasa', 360000);
+  f.put(1, 2, 'Tuya', 180001);
+  await f.federation.refresh();
+  assert.equal(f.federation.metadata().sources[0].synchronization, 'ok');
+  assert.equal(f.federation.metadata().sources[1].synchronization, 'unavailable');
+  f.advance(300000);
+  assert.equal(walk(f.federation).length, 1);
+  f.advance(60000);
+  assert.equal(walk(f.federation).length, 0);
+});
+
+test('Kasa packet loss remains visible even after later successful packets', async () => {
+  const f = fixture(['kasa']);
+  f.put(0);
+  f.nodes[0].mutate = (body, url) => url.pathname.includes('/status')
+    ? { ...body, daemons: [{ ...body.daemons[0], droppedDatagrams: 1 }] } : body;
+  await f.federation.refresh();
+  assert.equal(f.federation.metadata().completeness, false);
+  assert.match(f.federation.metadata().sources[0].error, /lost datagrams/);
+  assert.equal(walk(f.federation).length, 1);
+});
+
 test('eight configured sources corroborate matching records without duplicating devices', async () => {
   const f = fixture(['kasa', 'tuya', 'ssdp', 'kasa', 'tuya', 'ssdp', 'kasa', 'tuya']);
   for (let index = 0; index < 8; index++) f.put(index, 1, 'Same device');

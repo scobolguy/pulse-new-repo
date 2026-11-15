@@ -1,5 +1,32 @@
 # Pascalish hosted caches
 
+## Virtual caches
+
+A virtual cache is a read-only view over multiple local caches. Its declaration
+contains a unique node-local name and an ordered list of child cache names:
+
+```json
+{
+  "name": "networkdevices",
+  "virtual": true,
+  "sources": ["tuya", "tplink", "tapo"],
+  "capacity": 50,
+  "fields": [
+    {"name": "name", "type": "string"},
+    {"name": "protocol", "type": "string"},
+    {"name": "address", "type": "string"},
+    {"name": "deviceType", "type": "string"}
+  ]
+}
+```
+
+All source caches must be declared in the same node and use the same fields.
+`count`, `next` and `snapshot` operate on the combined live entries; virtual
+keys are prefixed as `source:key` so entries from different child caches cannot
+collide. `get` accepts that composite key. `put` and `remove` are rejected on a
+virtual cache. Cache and virtual-cache names share one namespace, and a node
+must reject duplicates and self-references.
+
 To enable the existing real passive SSDP collector alongside an installed
 `shared-devices` Kasa/Tuya context, run
 `node testing\pmachines\install-passive-ssdp.mjs http://192.168.2.115`.
@@ -42,6 +69,14 @@ Invalid/oversized writes fail without evicting live data. Supported item types
 are signed 32-bit integers, strings, booleans and nested records (at most 32
 scalar leaves). Aliases resolve structurally; unsupported types fail compilation.
 The host also checks keys, schemas and TTLs.
+
+Cache definitions may add `uniqueBy` and `latestBy` field constraints. A live
+duplicate `uniqueBy` value under another key rejects the write without changing
+the cache. `latestBy` may name an integer field or a fixed-width UTC timestamp
+string (`YYYY-MM-DDTHH:mm:ss.sssZ`). When replacing the same key, a value that is
+equal to or older than the stored value returns 0; a strictly newer value is
+stored and returns 1. Ignored stale writes do not refresh TTL or observation
+order. These checks are atomic and use the existing `cache_put` host binding.
 
 Compiler `hostCaches` metadata retains names, capacity and typed leaf schemas
 in compact signed maps. Internal `host.cache_put/get/remove` ABI values are JSON

@@ -35,3 +35,21 @@ test('VBish rejects endpoints outside a service and invalid endpoint verbs', () 
     'SERVICE worker\nENDPOINT "GET" "/status" HANDLER "Missing"',
   ), /handler not found/);
 });
+
+test('VBish and VB11 cache declarations emit typed unique/latest metadata', () => {
+  const cacheLine = 'PULSE CACHE "devices" CAPACITY 50 EVERY 180000 MS FIELDS "id:string,observedAt:string" UNIQUE BY id LATEST BY observedAt';
+  const pulse = compileVbishToPcode([
+    cacheLine, 'SERVICE telemetry', 'SUB ReadTemperature', 'END SUB',
+    'ENDPOINT "GET" "/temperature" HANDLER "ReadTemperature"'
+  ].join('\n'));
+  const vb11 = compileVbishToPcode([
+    cacheLine, 'Sub Main()', 'End Sub'
+  ].join('\n'), { profile: 'vb11' });
+  const expected = [{
+    name: 'devices', capacity: 50, ttlMs: 180000, storage: 'RAM', mode: 'PERSISTENT',
+    fields: [{ name: 'id', type: 'string' }, { name: 'observedAt', type: 'string' }],
+    uniqueBy: 'id', latestBy: 'observedAt'
+  }];
+  assert.deepEqual(pulse.programMap.hostCaches, expected);
+  assert.deepEqual(vb11.programMap.hostCaches, expected);
+});

@@ -3,6 +3,43 @@
 This directory is the common library boundary for Pulse's VBish and C#
 frontends. The name describes their source-language family, not a CLR,
 Microsoft .NET implementation, or Windows DLL format.
+
+## Daemon and cache declarations
+
+The frontends keep their source syntax distinct while emitting equivalent
+`programMap.runtimeUnit` and `programMap.hostCaches` metadata:
+
+- Pulse Kotlin uses `@Daemon(id = "...", refreshMs = 300000)` on `fun main()`
+  and `@Cache(name = "...", capacity = 50, ttlMs = 180000,
+  fields = "address:string,observedAt:string", uniqueBy = "address",
+  latestBy = "observedAt")` on a class.
+- Pulse C# uses `[Daemon("...", RefreshMs = 300000)]` and
+  `[Cache("...", Capacity = 50, TtlMs = 180000,
+  Fields = "address:string,observedAt:string", UniqueBy = "address",
+  LatestBy = "observedAt")]` on classes.
+- Pulse VBish/VB11 uses `PULSE DAEMON "..." EVERY 300000 MS` and
+  `PULSE CACHE "..." CAPACITY 50 EVERY 180000 MS FIELDS
+  "address:string,observedAt:string" UNIQUE BY address LATEST BY observedAt`.
+
+Daemon declarations become `runtimeUnit.kind = "daemon"`; cache declarations
+become typed host cache schemas. Field types are `integer`, `string`, or
+`boolean`; `uniqueBy` rejects a second live record with the same field value
+under a different key. `latestBy` accepts an integer or a fixed-width UTC
+timestamp string (`YYYY-MM-DDTHH:mm:ss.sssZ`). For a matching key, only strictly
+newer values replace the current record; equal or older values return 0 without
+changing TTL or observation order. The existing host cache ABI enforces these
+rules atomically without adding a P-machine opcode.
+Virtual caches use language-specific source syntax while emitting the same
+`virtual` and `sources` metadata:
+
+- Pulse Kotlin: `@VirtualCache(name = "networkDevices", sources = "tuya,tplink,tapo")`
+- Pulse C#: `[VirtualCache("networkDevices", Sources = "tuya,tplink,tapo")]`
+- Pulse VBish/VB11: `PULSE VIRTUAL CACHE "networkDevices" SOURCES "tuya,tplink,tapo"`
+
+The sources are child caches on the same node. Virtual caches are read-only
+aggregate views: `cacheCount` and `cacheSnapshot` include all live child
+entries, and snapshot keys use `source:key` to preserve identity. Cache and
+virtual-cache names share one node-local namespace.
 Kotlin also lowers its bounded scalar subset through this backend.
 
 ## Current implementation

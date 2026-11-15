@@ -82,3 +82,22 @@ test('daemon bundle requires its paired hosted service artifacts', async t => {
   assert.equal(installed.serviceEntry, 'service.pcode');
   assert.equal(installed.udpPort, 0);
 });
+
+test('program bundle removal deletes the installed directory', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'pulse-programs-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const store = createPmachineBundleStore(root);
+  await store.install({
+    name: 'remove-me',
+    manifest: {
+      name: 'remove-me', version: '1.0.0', type: 'resident',
+      entry: 'program.pcode', programMap: 'program.map.json'
+    },
+    files: [
+      { path: 'program.pcode', base64: encoded('program') },
+      { path: 'program.map.json', base64: encoded('{}') }
+    ]
+  });
+  assert.deepEqual(await store.remove('remove-me'), { name: 'remove-me', removed: true });
+  await assert.rejects(store.read('remove-me'), { code: 'ENOENT' });
+});

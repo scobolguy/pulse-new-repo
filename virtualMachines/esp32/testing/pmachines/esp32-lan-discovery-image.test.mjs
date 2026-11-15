@@ -5,17 +5,23 @@ import { encodeHostedImage } from '../../pmachines/shared/contracts/hosted-image
 
 const read = path => fs.readFile(new URL(path, import.meta.url), 'utf8');
 
-test('extended images do not relax legacy text/image limits or bounded execution memory', async () => {
-  assert.throws(() => encodeHostedImage('NOP\n'.repeat(513)), /instruction capacity/);
-  assert.throws(() => encodeHostedImage('NOP\n'.repeat(4097), { profile: 'extended' }), /instruction capacity/);
-  assert.throws(() => encodeHostedImage('HALT', { profile: 'unbounded' }), /Unknown/);
-  assert.throws(() => encodeHostedImage('CALL_EXT host.infrastructure_probe 0\nHALT', { profile: 'extended' }), /Desktop-only/);
-  assert.throws(() => encodeHostedImage(`PUSH_STR "${'x'.repeat(2049)}"\nHALT`, { profile: 'extended' }), /constant capacity/);
+test('hosted images have no fixed instruction-count cap', async () => {
+  assert.equal(Number.parseInt(encodeHostedImage('NOP\n'.repeat(513)).slice(4, 12), 16), 513);
+  const largeImage = encodeHostedImage('NOP\n'.repeat(6000));
+  assert.equal(Number.parseInt(largeImage.slice(4, 12), 16), 6000);
+  assert.ok(largeImage.length > 131072);
+  assert.throws(() => encodeHostedImage('HALT', { profile: 'unknown' }), /Unknown/);
+  assert.throws(() => encodeHostedImage('CALL_EXT host.infrastructure_probe 0\nHALT'), /Desktop-only/);
+  assert.throws(() => encodeHostedImage(`PUSH_STR "${'x'.repeat(2049)}"\nHALT`), /constant capacity/);
   const host = await read('../../pmachines/arduino/src/service_host.cpp');
   const image = await read('../../pmachines/arduino/src/hosted_image.h');
-  assert.match(host, /pcode\.size\(\) > 8192/);
-  assert.match(host, /out\.instructions->size\(\) > 512/);
-  assert.match(image, /PAGE_BYTES = 512, CACHE_PAGES = 4, MAX_PAGES = 256/);
+  const routes = await read('../../pmachines/arduino/src/pmachine_routes.cpp');
+  const uploads = await read('../../src/ffs/FederatedFileSystemRoutes.cpp');
+  assert.doesNotMatch(host, /instructions->size\(\) > 512/);
+  assert.doesNotMatch(routes, /pcode\.length\(\) > 8192/);
+  assert.doesNotMatch(uploads, /total > 131072/);
+  assert.match(image, /PAGE_BYTES = 512, CACHE_PAGES = 4/);
+  assert.doesNotMatch(image, /MAX_PAGES/);
 });
 
 test('node learns its report aggregator from beacon acks and runs no discovery of its own', async () => {

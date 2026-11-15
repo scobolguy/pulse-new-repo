@@ -62,6 +62,21 @@ test('Kotlin service exposes multiple GET endpoints through the JavaScript HTTP 
   assert.equal(missing.status, 404);
 });
 
+test('Kotlin services can target the portable native C++ host', () => {
+  const compiled = compileKotlinToPcode(source, { fileName: 'native_kotlin_service.kt', target: 'native' });
+  assert.equal(compiled.programMap.target, 'native');
+  assert.deepEqual(compiled.programMap.targets, ['js', 'native']);
+  assert.throws(() => compileKotlinToPcode(
+    `import pulse.host.cacheGet
+      import pulse.http.HttpGet
+      @HttpGet("/health")
+      fun health(): String = cacheGet("devices", "camera-1")`,
+    { fileName: 'native_cache_binding.kt', target: 'native' }), /does not support binding host\.cache_get/);
+  assert.throws(() => compileKotlinToPcode(
+    `@Daemon(id = "native-daemon", refreshMs = 1000) class NativeDaemon {}\nfun main() {}`,
+    { target: 'native' }), /hosted services only/);
+});
+
 test('Kotlin handlers read HTTP request context via host bindings', async t => {
   const compiled = compileKotlinToPcode(`import pulse.http.*
 @HttpGet("/api/context")
@@ -189,9 +204,9 @@ test('Kasa application sends its probe through generic UDP and reports network f
     if (respond) udp.send(Buffer.from('1234', 'hex'), peer.port, peer.address);
   });
   const port = udp.address().port;
-  const example = await fs.readFile(new URL('../examples/kasa-discovery-daemon.kt', import.meta.url), 'utf8');
+  const example = await fs.readFile(new URL('../examples/kasa-probe-service.kt', import.meta.url), 'utf8');
   const source = example.replace('const val KASA_DISCOVERY_PORT = 9999', `const val KASA_DISCOVERY_PORT = ${port}`);
-  const compiled = compileKotlinToPcode(source, { fileName: 'kasa-discovery-daemon.kt', target: 'esp32' });
+  const compiled = compileKotlinToPcode(source, { fileName: 'kasa-probe-service.kt', target: 'esp32' });
   assert.match(compiled.pcodeText, /CALL_EXT host\.udp_exchange/);
   assert.doesNotMatch(compiled.pcodeText, /host\.kasa_discover/);
   const host = await createPascalishServiceHost({
@@ -209,6 +224,117 @@ test('Kasa application sends its probe through generic UDP and reports network f
   await assert.rejects(dispatch('127.0.0.2'), /Network peer is not allowed/);
   respond = false;
   await assert.rejects(dispatch('127.0.0.1'), /UDP exchange timeout/);
+});
+
+test('Kotlin Kasa daemon sends a discovery packet and publishes a decoded device', async t => {
+  const peer = dgram.createSocket('udp4');
+  await new Promise((resolve, reject) => {
+    peer.once('error', reject);
+    peer.bind(0, '127.0.0.2', resolve);
+  });
+  t.after(() => new Promise(resolve => peer.close(resolve)));
+  const port = peer.address().port;
+  const source = (await fs.readFile(new URL('../examples/kasa-discovery-daemon.kt', import.meta.url), 'utf8'))
+    .replace('const val KASA_PORT = 9999', `const val KASA_PORT = ${port}`)
+    .replace('localIpv4Subnets()',
+      '"[{\\"address\\":\\"127.0.0.1\\",\\"broadcast\\":\\"127.0.0.2\\"}]"');
+  const daemon = compileKotlinToPcode(source, {
+    fileName: 'kasa-discovery-daemon.kt', target: 'esp32', daemonId: 'kasa-collector', daemonRefreshMs: 300000
+  });
+  const compiled = compileKotlinToPcode(
+    await fs.readFile(new URL('../examples/kasa-device-service.kt', import.meta.url), 'utf8'),
+    { fileName: 'kasa-device-service.kt', target: 'esp32', serviceId: 'kasa-service' }
+  );
+  const schema = [{ name: 'devices', capacity: 50, fields: ['name', 'protocol', 'address', 'deviceType']
+    .map(name => ({ name, type: 'string' })) }];
+  compiled.programMap.hostCaches = schema;
+  daemon.programMap.hostCaches = schema;
+  let probe, encrypted;
+  peer.on('message', (message, remote) => {
+    probe = message.toString('hex');
+    let key = 171;
+    const response = Buffer.from(JSON.stringify({ system: { get_sysinfo: {
+      err_code: 0, alias: 'Kitchen', model: 'HS200'
+    } } }));
+    encrypted = Buffer.from([...response].map(byte => { key ^= byte; return key; }));
+    for (let i = 0; i < 3; i++) peer.send(encrypted, remote.port, remote.address);
+  });
+  const host = await createPascalishServiceHost({
+    compiled, daemons: [{ compiled: daemon, udpPort: port, udpBindAddress: '127.0.0.1', udpQueueLimit: 50 }],
+    collectorId: 'kasa-test', host: '127.0.0.1', httpPort: null, udpPort: null,
+    networkPeers: [{ ip: '127.0.0.2', port }], logger: { warn() {}, error() {}, log() {} }
+  });
+  t.after(() => host.stop());
+  await host.start();
+  const deadline = Date.now() + 12000;
+  while (host.getStatus().daemonDiagnostics[0].udpEvents < 3 && Date.now() < deadline)
+    await new Promise(resolve => setTimeout(resolve, 10));
+  const stats = host.getStatus().daemonDiagnostics[0];
+  assert.equal(stats.failures, 0, stats.lastError);
+  assert.equal(stats.udpEvents, 3);
+  assert.equal(stats.shedDatagrams, 0);
+  assert.equal(probe, 'd0f281f88bff9af7d5ef94b6d1b4c09fec95e68fe187e8caf08bf68bf6');
+  const snapshot = await host.dispatch({ method: 'GET', path: '/api/devices/snapshot', query: {} });
+  assert.equal(snapshot.body.total, 1);
+  assert.deepEqual(snapshot.body.records[0].device, {
+    name: 'Kitchen', protocol: 'kasa', address: '127.0.0.2', deviceType: 'HS200'
+  });
+  assert.ok(snapshot.body.records[0].remainingTTLms > 300000);
+  const unrelated = dgram.createSocket('udp4');
+  t.after(() => new Promise(resolve => unrelated.close(resolve)));
+  await new Promise((resolve, reject) => unrelated.send(Buffer.from('unrelated'), port, '127.0.0.1',
+    error => error ? reject(error) : resolve()));
+  while (host.getStatus().daemonDiagnostics[0].udpEvents < 4 && Date.now() < deadline)
+    await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(host.getStatus().daemonDiagnostics[0].udpEvents, 4);
+  assert.equal(host.getStatus().daemonDiagnostics[0].failures, 0);
+  await new Promise((resolve, reject) => peer.send(Buffer.from(probe, 'hex'), port, '127.0.0.1',
+    error => error ? reject(error) : resolve()));
+  while (host.getStatus().daemonDiagnostics[0].udpEvents < 5 && Date.now() < deadline)
+    await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(host.getStatus().daemonDiagnostics[0].udpEvents, 5);
+  assert.equal(host.getStatus().daemonDiagnostics[0].failures, 0);
+  await new Promise((resolve, reject) => peer.send(Buffer.from('invalid'), port, '127.0.0.1',
+    error => error ? reject(error) : resolve()));
+  while (host.getStatus().daemonDiagnostics[0].failures < 1 && Date.now() < deadline)
+    await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(host.getStatus().daemonDiagnostics[0].failures, 1);
+  assert.notEqual(host.getStatus().daemonDiagnostics[0].lastError, '');
+  const afterError = await host.dispatch({ method: 'GET', path: '/api/devices/snapshot', query: {} });
+  assert.equal(afterError.body.total, 1);
+  await Promise.all(Array.from({ length: 60 }, () => new Promise((resolve, reject) =>
+    peer.send(encrypted, port, '127.0.0.1', error => error ? reject(error) : resolve()))));
+  const overflowDeadline = Date.now() + 5000;
+  while (host.getStatus().daemonDiagnostics[0].shedDatagrams === 0 && Date.now() < overflowDeadline)
+    await new Promise(resolve => setTimeout(resolve, 10));
+  assert.ok(host.getStatus().daemonDiagnostics[0].shedDatagrams > 0, 'Queue overflow must be reported');
+});
+
+test('Kotlin daemon schedules its next run after exactly five minutes', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const compiled = compileKotlinToPcode('@HttpGet("/api/test") fun test(): String = "{}"', {
+    fileName: 'service.kt', serviceId: 'schedule-service'
+  });
+  const daemon = compileKotlinToPcode('fun main() {}', {
+    fileName: 'daemon.kt', daemonId: 'schedule-daemon', daemonRefreshMs: 300000
+  });
+  assert.throws(() => compileKotlinToPcode('fun main() {}', {
+    daemonId: 'invalid', daemonRefreshMs: 300001
+  }), /between 10 and 300000/);
+  const host = await createPascalishServiceHost({
+    compiled, daemons: [daemon], collectorId: 'schedule-test', httpPort: null, udpPort: null,
+    logger: { warn() {}, error() {}, log() {} }
+  });
+  t.after(() => host.stop());
+  await host.start();
+  assert.equal(host.getStatus().daemonDiagnostics[0].timerRuns, 1);
+  t.mock.timers.tick(299999);
+  assert.equal(host.getStatus().daemonDiagnostics[0].timerRuns, 1);
+  t.mock.timers.tick(1);
+  const deadline = Date.now() + 5000;
+  while (host.getStatus().daemonDiagnostics[0].timerRuns < 2 && Date.now() < deadline)
+    await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(host.getStatus().daemonDiagnostics[0].timerRuns, 2);
 });
 
 for (const [description, sourceText, expected] of [

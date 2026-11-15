@@ -409,7 +409,10 @@ Hosted applications register their own endpoints and use generic, allowlisted
 network exchanges. The old ESP32 `host.kasa_discover` binding is unavailable;
 `network_discovery_step` no longer discovers Kasa devices. A Pulse Kotlin
 single-address discovery example is in
-[`kasa-discovery-daemon.kt`](../../../../languages/kotlin/examples/kasa-discovery-daemon.kt).
+[`kasa-probe-service.kt`](../../../../languages/kotlin/examples/kasa-probe-service.kt).
+The separate [`kasa-discovery-daemon.kt`](../../../../languages/kotlin/examples/kasa-discovery-daemon.kt)
+implements periodic legacy UDP broadcast discovery for the JS network cache.
+The Kotlin daemon and its ESP32 installer have not yet been validated on hardware.
 
 The protocol implementation is [kasa-legacy-service.pas](../../src/kasa-legacy-service.pas).
 It constructs Kasa JSON commands, performs the rolling XOR cipher (initial key
@@ -432,8 +435,7 @@ node testing\pmachines\run-kasa-service.mjs --target esp32 --esp32 http://192.16
 ```
 
 Installation writes four signed service/daemon artifacts through FFS. It refuses
-to replace an already-running Kasa installation; the ESP32 host supports up to
-two installed service/daemon pairs. Installation is not automatic after a reboot: rerun the
+to replace an already-running Kasa installation. Installation is not automatic after a reboot: rerun the
 installer to reload the persisted artifacts. No filesystem image upload is needed.
 The installer performs only read-only status and discovery requests.
 
@@ -683,30 +685,31 @@ large contiguous heap block for the legacy text loader. The Kasa installer now
 uploads a signed PHI1 executable image instead: resolved 12-byte instruction
 records and a deduplicated UTF-8 constant pool. The transport-safe hex image
 is uploaded through `POST /ffs/upload_stream?file=<path>` with content type
-`application/octet-stream`, a known nonzero content length and a 32768-byte
-maximum. This streams directly to local FFS storage rather than buffering
-large form values. Interrupted uploads may leave an incomplete file, which
-cannot pass the signed-image install checks.
+`application/octet-stream` and a known nonzero content length. This streams
+directly to local FFS storage rather than buffering large form values; storage
+exhaustion fails the write. Interrupted uploads may leave an incomplete file,
+which cannot pass the signed-image install checks.
 The worker's 16 KB stack is reserved before artifact
 loading. FFS-paged images share a cache of 512-byte image pages. On boards with
 PSRAM, its first use reserves one quarter of total PSRAM for the cache, including
 page metadata; allocation failure is reported rather than silently falling back.
 On boards without PSRAM, the shared cache remains four internal-memory pages.
 The PSRAM cache is direct-mapped and caches immutable image bytes only, not runtime
-stacks or heaps. Per-image hashes are also retained (maximum 64 pages for the
-default `bounded` profile, 256 for explicit `hostImageProfile: "extended"`),
-not a fully decoded instruction array or one large contiguous image-cache block.
+stacks or heaps. Per-image hashes are retained for the stored image, not a fully
+decoded instruction array or one large contiguous image-cache block. Their
+allocation is bounded by available heap.
 A shared-ownership lease returns a slot after a failed installation or stop,
 closing its file, invalidating the old cache and releasing page/hash allocations.
 Instruction reads do not grow the cache. Ownership, metadata, constant decoding
 and runtime JSON allocations still remain.
-The bounded profile remains 512 instructions/32768 encoded bytes. The extended
-profile is 4096 instructions/131072 encoded bytes, with the same 2048-byte constant,
-eight-argument, invocation-time, string-pool, and heap limits. Legacy text loading
-remains 8192 bytes/512 instructions; it is not extended. `encodeHostedImage`
-requires `{ profile: 'extended' }` to produce a larger image. The existing external
-`/ffs/upload_stream` endpoint retains its 32768-byte cap; the larger built-in
-bootstrap uses local streamed FFS writes instead.
+Hosted images have no fixed instruction-count or image-byte cap. The `bounded`
+and `extended` profile names remain accepted for older installers but no longer
+impose separate limits; new installers use `storage-backed`. Image size is
+limited by available FFS storage, addressable image fields, and the heap required
+for authentication metadata (or PSRAM when resident mode is requested). Legacy
+text artifacts likewise have no fixed byte or instruction-count cap, but parsing
+requires enough free heap for the decoded instructions. Each constant remains
+limited to 2048 bytes and invocation-time and runtime string/heap limits remain.
 The `esp32dev` build uses 32-slot ArduinoJson pools instead of the 128-slot default,
 reducing each contiguous pool allocation without changing JSON field/value limits.
 This applies consistently to the entire profile to preserve ArduinoJson ABI

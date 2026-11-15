@@ -14,6 +14,7 @@
 #include <new>
 #include <set>
 #include <stdexcept>
+#include <algorithm>
 
 namespace pmachine {
 namespace {
@@ -181,6 +182,10 @@ public:
     bool beginOwned(uint16_t port, const std::string& group) {
         socketHandle = socket(AF_INET, SOCK_DGRAM, 0);
         if (socketHandle < 0) return false;
+        int reuse = 1;
+        if (setsockopt(socketHandle, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
+            stop(); return false;
+        }
         sockaddr_in local{};
         local.sin_family = AF_INET; local.sin_port = htons(port); local.sin_addr.s_addr = INADDR_ANY;
         if (fcntl(socketHandle, F_SETFL, O_NONBLOCK) < 0 ||
@@ -321,7 +326,10 @@ const Binding bindings[] = {
     {"buffer_hex", "i", true}, {"buffer_text", "i", true}, {"buffer_release", "i", false},
     {"byte_xor", "ii", false}, {"tcp_exchange", "sisiii", true},
     {"tcp_exchange_buffer", "sisiii", false},
-    {"udp_exchange", "sisii", true}, {"local_ipv4_subnets", "", true},
+    {"udp_exchange", "sisii", true}, {"udp_send", "sis", false},
+    {"network_peer_allowed", "si", false}, {"local_ipv4_subnets", "", true},
+    {"local_ipv4_batch", "ii", true},
+    {"bluetooth_scan", "i", true},
     {"camera_discover", "", true},
     {"network_discovery_step", "", true},
     {"filesystem_post", "sissi", true},
@@ -334,6 +342,34 @@ const Binding* binding(const std::string& symbol) {
 }
 bool identifier(const std::string& text) {
     return !text.empty() && text.size() <= 256 && text.find_first_not_of(" \t\r\n") != std::string::npos;
+}
+bool sortableTimestamp(const char* value) {
+    if (!value || strlen(value) != 24) return false;
+    constexpr size_t punctuation[] = {4, 7, 10, 13, 16, 19, 23};
+    constexpr char expected[] = {'-', '-', 'T', ':', ':', '.', 'Z'};
+    for (size_t index = 0; index < 24; ++index) {
+        bool isPunctuation = false;
+        for (size_t part = 0; part < 7; ++part) {
+            if (index == punctuation[part]) {
+                if (value[index] != expected[part]) return false;
+                isPunctuation = true;
+                break;
+            }
+        }
+        if (!isPunctuation && (value[index] < '0' || value[index] > '9')) return false;
+    }
+    const auto number = [value](size_t start, size_t count) {
+        int result = 0;
+        for (size_t index = 0; index < count; ++index) result = result * 10 + value[start + index] - '0';
+        return result;
+    };
+    const int year = number(0, 4), month = number(5, 2), day = number(8, 2);
+    if (year < 1 || month < 1 || month > 12) return false;
+    constexpr int monthLengths[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    const int februaryDays = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) ? 29 : 28;
+    const int maxDay = month == 2 ? februaryDays : monthLengths[month - 1];
+    return day >= 1 && day <= maxDay && number(11, 2) <= 23
+        && number(14, 2) <= 59 && number(17, 2) <= 59;
 }
 }
 
@@ -413,7 +449,7 @@ ServiceHost::SerializeResult ServiceHost::serializeValue(JsonVariantConst value,
 
 bool ServiceHost::parseUnit(const std::string& pcode, const JsonDocument& map,
                            const char* kind, Unit& out, std::string& error) {
-    if (pcode.empty() || pcode.size() > 8192 || map["hostBindingsVersion"] != 1
+    if (pcode.empty() || map["hostBindingsVersion"] != 1
         || std::string(map["runtimeUnit"]["kind"] | "") != kind) {
         error = "Unsupported hosted unit or artifact size"; return false;
     }
@@ -421,7 +457,10 @@ bool ServiceHost::parseUnit(const std::string& pcode, const JsonDocument& map,
     for (JsonVariantConst item : map["targets"].as<JsonArrayConst>())
         if (std::string(item.as<const char*>() ? item.as<const char*>() : "") == "esp32") target = true;
     if (!target) { error = "Hosted artifact does not target ESP32"; return false; }
-    const size_t lines = 1 + std::count(pcode.begin(), pcode.end(), '\n');
+    const size_t lines = 1 + static_cast<size_t>(std::count(pcode.begin(), pcode.end(), '\n'));
+    if (lines > (std::numeric_limits<size_t>::max() - 32768) / sizeof(PInstruction)) {
+        error = "Hosted instruction allocation size exceeds addressable memory"; return false;
+    }
     const size_t instructionBytes = lines * sizeof(PInstruction);
     Serial.printf("[SERVICE-HOST] Parsing %u bytes, %u lines, %u instruction bytes; heap=%u largest=%u\n",
         static_cast<unsigned>(pcode.size()), static_cast<unsigned>(lines),
@@ -439,8 +478,8 @@ bool ServiceHost::parseUnit(const std::string& pcode, const JsonDocument& map,
             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
         error = "Hosted instruction allocation failed"; return false;
     }
-    if (out.instructions->empty() || out.instructions->size() > 512) {
-        error = "Hosted instruction capacity exceeded"; return false;
+    if (out.instructions->empty()) {
+        error = "Hosted unit has no instructions"; return false;
     }
     return validateUnit(map, kind, out, error);
 }
@@ -563,13 +602,20 @@ bool ServiceHost::validateUnit(const JsonDocument& map, const char* kind, Unit& 
         }
     }
     if (!map["hostCaches"].isNull()) {
-        if (!map["hostCaches"].is<JsonArrayConst>() || map["hostCaches"].size() > 2) {
+        if (!map["hostCaches"].is<JsonArrayConst>() || map["hostCaches"].size() > 16) {
             error = "Invalid hosted cache declarations"; return false;
         }
         for (JsonVariantConst definition : map["hostCaches"].as<JsonArrayConst>()) {
             const std::string name = definition["name"] | "";
+            const bool isVirtual = definition["virtual"] | false;
+            const std::string storage = definition["storage"] | "RAM";
+            const std::string mode = definition["mode"] | "PERSISTENT";
+            const std::string uniqueBy = definition["uniqueBy"] | "";
+            const std::string latestBy = definition["latestBy"] | "";
             if (!identifier(name) || name.find_first_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ") != std::string::npos
                 || !definition["capacity"].is<int>() || definition["capacity"] != 50 || out.cacheSchemas.count(name)
+                || (storage != "RAM" && storage != "FFS")
+                || (mode != "PERSISTENT" && mode != "UPDATEABLE")
                 || !definition["fields"].is<JsonArrayConst>() || definition["fields"].size() < 1
                 || definition["fields"].size() > 32) { error = "Invalid hosted cache declaration"; return false; }
             auto& fields = out.cacheSchemas[name];
@@ -580,6 +626,40 @@ bool ServiceHost::validateUnit(const JsonDocument& map, const char* kind, Unit& 
                     error = "Invalid hosted cache schema"; return false;
                 }
                 fields[key] = type;
+            }
+            if ((!uniqueBy.empty() && !fields.count(uniqueBy))
+                || (!latestBy.empty() && (!fields.count(latestBy)
+                    || fields[latestBy] == "boolean"))
+                || (isVirtual && (!uniqueBy.empty() || !latestBy.empty()))) {
+                error = "Invalid hosted cache constraint"; return false;
+            }
+            out.cachePolicies[name] = { storage, mode, uniqueBy, latestBy };
+            if (isVirtual) {
+                if (!definition["sources"].is<JsonArrayConst>() || definition["sources"].size() < 1
+                    || definition["sources"].size() > 16) {
+                    error = "Invalid virtual cache sources"; return false;
+                }
+                auto& sources = out.cacheVirtualSources[name];
+                for (JsonVariantConst source : definition["sources"].as<JsonArrayConst>()) {
+                    const std::string child = source | "";
+                    if (!identifier(child) || child == name
+                        || std::find(sources.begin(), sources.end(), child) != sources.end()) {
+                        error = "Invalid virtual cache source"; return false;
+                    }
+                    sources.push_back(child);
+                }
+            } else if (definition["sources"].is<JsonArrayConst>()) {
+                error = "Non-virtual cache cannot declare sources"; return false;
+            }
+        }
+        for (const auto& virtualCache : out.cacheVirtualSources) {
+            const auto schema = out.cacheSchemas.find(virtualCache.first);
+            for (const auto& source : virtualCache.second) {
+                const auto child = out.cacheSchemas.find(source);
+                if (child == out.cacheSchemas.end() || out.cacheVirtualSources.count(source)
+                    || child->second != schema->second) {
+                    error = "Virtual cache source schema mismatch"; return false;
+                }
             }
         }
     }
@@ -618,7 +698,8 @@ bool ServiceHost::validateUnit(const JsonDocument& map, const char* kind, Unit& 
     if (std::string(kind) == "daemon") {
         if (!map["runtimeUnit"]["refreshMs"].is<uint32_t>()) { error = "Invalid daemon interval"; return false; }
         out.interval = map["runtimeUnit"]["refreshMs"].as<uint32_t>();
-        if (out.interval < 10 || out.interval > 180000) { error = "Invalid daemon interval"; return false; }
+        if (out.interval < 10 || out.interval > 300000) { error = "Invalid daemon interval"; return false; }
+        out.id = map["runtimeUnit"]["id"] | "";
     }
     return true;
 }
@@ -822,6 +903,12 @@ bool ServiceHost::install(Unit newService, std::vector<DaemonSpec> newDaemons, c
             const auto serviceCache = newService.cacheSchemas.find(cache.first);
             if (serviceCache == newService.cacheSchemas.end() || serviceCache->second != cache.second) {
                 error = "Daemon cache declaration must match its service cache"; return false;
+            }
+            const auto daemonPolicy = daemon.unit.cachePolicies.find(cache.first);
+            const auto servicePolicy = newService.cachePolicies.find(cache.first);
+            if (daemonPolicy == daemon.unit.cachePolicies.end() || servicePolicy == newService.cachePolicies.end()
+                || daemonPolicy->second != servicePolicy->second) {
+                error = "Daemon cache policy must match its service cache"; return false;
             }
         }
         if (!daemon.udpPort) continue;
@@ -1083,10 +1170,13 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
     }
     else if (op.rfind("bytes_", 0) == 0 || (op.rfind("buffer_", 0) == 0 && op.rfind("buffer_json_", 0) != 0)
         || op == "byte_xor" || op == "tcp_exchange" || op == "tcp_exchange_buffer"
-        || op == "udp_exchange" || op == "local_ipv4_subnets"
+        || op == "udp_exchange" || op == "udp_send" || op == "network_peer_allowed" || op == "local_ipv4_subnets"
+        || op == "local_ipv4_batch"
+        || op == "bluetooth_scan"
         || op == "camera_discover"
         || op == "network_discovery_step" || op == "filesystem_post") {
-        if (!network.invoke(op, args, result, error)) return fail(error, error, 502);
+        if (!network.invoke(op, args, result, error,
+                            activeDaemon ? activeDaemon->udp.get() : nullptr)) return fail(error, error, 502);
     }
     else if (op == "event_body") result.text = body;
     else if (op == "event_bytes") {
@@ -1387,12 +1477,60 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
     } else if (op.rfind("cache_", 0) == 0) {
         const auto definition = current->service.cacheSchemas.find(args[0].text);
         if (definition == current->service.cacheSchemas.end()) return fail("Undeclared cache", error);
+        const auto virtualDefinition = current->service.cacheVirtualSources.find(args[0].text);
+        const bool isVirtual = virtualDefinition != current->service.cacheVirtualSources.end();
+        auto virtualEntries = [&](uint64_t time, std::vector<HostCacheStore::SnapshotEntry>& entries,
+                                  uint32_t& total, uint64_t& revision, std::string& virtualError) {
+            entries.clear(); total = 0; revision = 0;
+            if (!isVirtual) return true;
+            for (const auto& source : virtualDefinition->second) {
+                HostCacheStore::Snapshot sourcePage;
+                if (!current->caches->snapshot(source, "", "", time, sourcePage, virtualError)) return false;
+                total += sourcePage.total;
+                revision = std::max(revision, sourcePage.revision);
+                std::string cursor;
+                while (true) {
+                    std::string key;
+                    current->caches->next(source, cursor, time, key);
+                    if (key.empty()) break;
+                    std::string value;
+                    if (!current->caches->get(source, key, time, value, virtualError)) return false;
+                    entries.push_back({source + ":" + key, value, time, 0, 0});
+                    cursor = key;
+                }
+            }
+            std::sort(entries.begin(), entries.end(), [](const HostCacheStore::SnapshotEntry& left,
+                                                        const HostCacheStore::SnapshotEntry& right) {
+                return left.key < right.key;
+            });
+            return true;
+        };
         if (op == "cache_snapshot") {
             HostCacheStore::Snapshot page;
             std::string snapshotError;
             const auto timestamp = now();
-            if (!current->caches->snapshot(args[0].text, args[1].text, args[2].text, timestamp, page, snapshotError))
+            if (isVirtual) {
+                std::vector<HostCacheStore::SnapshotEntry> entries;
+                uint32_t total = 0; uint64_t revision = 0;
+                if (!virtualEntries(timestamp, entries, total, revision, snapshotError))
+                    return fail(snapshotError, error, 409);
+                if (!args[2].text.empty() && args[2].text != std::to_string(revision))
+                    return fail("Snapshot revision changed", error, 409);
+                if (args[1].text.size() > 256 || (!args[1].text.empty() && args[2].text.empty()))
+                    return fail("Invalid snapshot cursor or revision", error, 409);
+                page.revision = revision; page.total = total;
+                auto entry = entries.begin();
+                if (!args[1].text.empty()) {
+                    while (entry != entries.end() && entry->key != args[1].text) ++entry;
+                    if (entry == entries.end()) return fail("Invalid snapshot cursor", error, 409);
+                    ++entry;
+                }
+                for (; entry != entries.end() && page.records.size() < 2; ++entry)
+                    page.records.push_back(*entry);
+                if (entry != entries.end()) page.nextCursor = page.records.back().key;
+            } else if (!current->caches->snapshot(args[0].text, args[1].text, args[2].text, timestamp, page, snapshotError)) {
                 return fail(snapshotError, error, 409);
+            }
             JsonDocument doc(&jsonAllocator);
             doc["version"] = 1; doc["collectorId"] = current->collectorId; doc["bootId"] = current->bootId;
             doc["revision"] = std::to_string(page.revision); doc["sequence"] = page.revision;
@@ -1412,24 +1550,59 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
         }
         // Reads observe the cache as of invocation start and never refresh or expire entries.
         if (op == "cache_count") {
-            result.integer = static_cast<int>(current->caches->count(args[0].text, invocationStartedAt));
+            if (isVirtual) {
+                uint32_t count = 0;
+                for (const auto& source : virtualDefinition->second)
+                    count += current->caches->count(source, invocationStartedAt);
+                result.integer = static_cast<int>(count);
+            } else {
+                result.integer = static_cast<int>(current->caches->count(args[0].text, invocationStartedAt));
+            }
             return true;
         }
         if (op == "cache_next") {
             if (args[1].text.size() > 256)
                 return fail("Invalid cache cursor", error);
-            current->caches->next(args[0].text, args[1].text, invocationStartedAt, result.text);
+            if (isVirtual) {
+                std::vector<HostCacheStore::SnapshotEntry> entries;
+                uint32_t total = 0; uint64_t revision = 0; std::string virtualError;
+                if (!virtualEntries(invocationStartedAt, entries, total, revision, virtualError))
+                    return fail(virtualError, error);
+                result.text.clear();
+                for (const auto& entry : entries) {
+                    if (args[1].text.empty() || entry.key > args[1].text) {
+                        result.text = entry.key;
+                        break;
+                    }
+                }
+            } else {
+                current->caches->next(args[0].text, args[1].text, invocationStartedAt, result.text);
+            }
             return true;
         }
-        if (!identifier(args[1].text)) return fail("Invalid cache key", error);
+        if (isVirtual ? (args[1].text.empty() || args[1].text.size() > 256)
+                      : !identifier(args[1].text))
+            return fail("Invalid cache key", error);
         const auto timestamp = now();
         if (op == "cache_get") {
             std::string cacheError;
-            if (!current->caches->get(args[0].text, args[1].text, invocationStartedAt, result.text, cacheError))
+            if (isVirtual) {
+                const auto separator = args[1].text.find(':');
+                if (separator == std::string::npos) return fail("Cache key missing or expired", error);
+                const std::string source = args[1].text.substr(0, separator);
+                const std::string childKey = args[1].text.substr(separator + 1);
+                if (std::find(virtualDefinition->second.begin(), virtualDefinition->second.end(), source)
+                        == virtualDefinition->second.end()
+                    || !current->caches->get(source, childKey, invocationStartedAt, result.text, cacheError))
+                    return fail("Cache key missing or expired", error);
+            } else if (!current->caches->get(args[0].text, args[1].text, invocationStartedAt, result.text, cacheError)) {
                 return fail(cacheError, error);
+            }
         } else if (op == "cache_remove") {
+            if (isVirtual) return fail("Virtual cache is read-only", error);
             result.integer = current->caches->remove(args[0].text, args[1].text, timestamp) ? 1 : 0;
         } else {
+            if (isVirtual) return fail("Virtual cache is read-only", error);
             const auto ttlMs = args[3].integer;
             JsonDocument value(&jsonAllocator);
             if (ttlMs < 1 || ttlMs > 2147483647 || args[2].text.size() > BODY_LIMIT
@@ -1442,7 +1615,70 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
                     : !item.is<int32_t>() || (field.second == "boolean" && item.as<int32_t>() != 0 && item.as<int32_t>() != 1))
                     return fail("Cache item does not match declared type", error);
             }
+            const auto policy = current->service.cachePolicies.find(args[0].text);
+            if (policy == current->service.cachePolicies.end())
+                return fail("Missing hosted cache policy", error, 500);
             std::string cacheError;
+            if (!policy->second.uniqueBy.empty()) {
+                const std::string fieldName = policy->second.uniqueBy;
+                const std::string fieldType = definition->second.at(fieldName);
+                const auto incoming = objectValue[fieldName];
+                std::string cursor;
+                while (true) {
+                    std::string candidate;
+                    current->caches->next(args[0].text, cursor, timestamp, candidate);
+                    if (candidate.empty()) break;
+                    cursor = candidate;
+                    if (candidate == args[1].text) continue;
+                    std::string cached;
+                    JsonDocument existing(&jsonAllocator);
+                    if (!current->caches->get(args[0].text, candidate, timestamp, cached, cacheError)
+                        || !object(cached, existing))
+                        return fail("Cached item could not be validated", error, 500);
+                    const JsonObjectConst existingObject = existing.as<JsonObjectConst>();
+                    const JsonVariantConst previous = existingObject[fieldName];
+                    const bool equal = fieldType == "string"
+                        ? previous.is<const char*>() && incoming.is<const char*>()
+                            && std::string(previous.as<const char*>()) == incoming.as<const char*>()
+                        : previous.is<int32_t>() && incoming.is<int32_t>()
+                            && previous.as<int32_t>() == incoming.as<int32_t>();
+                    if (equal) return fail("Cache uniqueBy field conflict", error, 409);
+                }
+            }
+            if (!policy->second.latestBy.empty()) {
+                const std::string fieldName = policy->second.latestBy;
+                const bool integerTimestamp = definition->second.at(fieldName) == "integer";
+                int32_t incomingInteger = 0;
+                std::string incomingText;
+                if (integerTimestamp) incomingInteger = objectValue[fieldName].as<int32_t>();
+                else {
+                    incomingText = objectValue[fieldName].as<const char*>();
+                    if (!sortableTimestamp(incomingText.c_str()))
+                        return fail("latestBy requires a sortable UTC timestamp", error);
+                }
+                std::string previousJson;
+                if (current->caches->get(args[0].text, args[1].text, timestamp, previousJson, cacheError)) {
+                    JsonDocument previous(&jsonAllocator);
+                    if (!object(previousJson, previous))
+                        return fail("Cached item could not be validated", error, 500);
+                    const JsonObjectConst previousObject = previous.as<JsonObjectConst>();
+                    const JsonVariantConst previousValue = previousObject[fieldName];
+                    if (integerTimestamp) {
+                        if (!previousValue.is<int32_t>()) return fail("Cached timestamp has an invalid type", error, 500);
+                        if (incomingInteger <= previousValue.as<int32_t>()) {
+                            result.integer = 0;
+                            return true;
+                        }
+                    } else {
+                        if (!previousValue.is<const char*>() || !sortableTimestamp(previousValue.as<const char*>()))
+                            return fail("Cached timestamp has an invalid value", error, 500);
+                        if (incomingText <= previousValue.as<const char*>()) {
+                            result.integer = 0;
+                            return true;
+                        }
+                    }
+                }
+            }
             if (!current->caches->put(args[0].text, args[1].text, args[2].text, static_cast<uint32_t>(ttlMs), timestamp, cacheError))
                 return fail(cacheError, error, 503);
             result.integer = 1;
@@ -1833,6 +2069,9 @@ bool ServiceHost::runDaemon(Daemon& daemon) {
                 method = "UDP"; path = "/daemon/udp";
                 body.assign(reinterpret_cast<const char*>(payload.data()), size);
                 peer = address.c_str(); query = "{}"; headers = "{}"; peerPort = daemon.udp->remotePort();
+                Serial.printf("[SERVICE-HOST] Daemon UDP received peer=%s peerPort=%u listenerPort=%u bytes=%d largest=%u\n",
+                    address.c_str(), static_cast<unsigned>(peerPort), static_cast<unsigned>(daemon.udpPort), size,
+                    static_cast<unsigned>(largest));
                 eventUdp = daemon.udp.get();
                 ++daemon.udpEvents;
                 udpEvent = true;
@@ -1855,6 +2094,8 @@ bool ServiceHost::runDaemon(Daemon& daemon) {
     if (!ok) {
         ++daemon.failures;
         daemon.lastError = current->lastError.substr(0, 127);
+        Serial.printf("[SERVICE-HOST] Daemon UDP processing failed listenerPort=%u error=%s\n",
+            static_cast<unsigned>(daemon.udpPort), daemon.lastError.c_str());
     } else if (udpEvent || !daemon.udp) daemon.lastError.clear();
     return true;
 }
@@ -2166,7 +2407,7 @@ std::string ServiceHost::status(const std::string& id) {
     doc["hostProcedureLocals"] = true;
     doc["hostCobolText"] = true;
     auto profiles = doc["hostImageProfiles"].to<JsonArray>();
-    profiles.add("bounded"); profiles.add("extended");
+    profiles.add("storage-backed");
     auto lan = doc["lanDiscovery"].to<JsonObject>();
     lan["policy"] = "beacon-ack";
     const LearnedAggregator learned = learnedAggregatorSnapshot();
@@ -2252,6 +2493,7 @@ void ServiceHost::daemonDiagnostics(JsonArray list, const Context& context) {
         const auto& daemon = context.daemons[index];
         auto item = list.add<JsonObject>();
         item["index"] = index;
+        item["id"] = daemon.unit.id;
         item["intervalMs"] = daemon.unit.interval;
         item["udpPort"] = daemon.udpPort;
         if (!daemon.multicastGroup.empty()) {

@@ -75,6 +75,10 @@ export function parseCsharp(source, { fileName = 'program.cs' } = {}) {
   function readClass(ctx, namespace) {
     modifiers(ctx.classModifier());
     const token = identifier(ctx.identifier()), name = namespace ? `${namespace}.${token.value}` : token.value;
+    const attributes = ctx.attributeSection().map(attribute => ({
+      name: identifier(attribute.identifier()).value,
+      arguments: attribute.arguments()?.expressionList()?.expression().map(expression) || []
+    }));
     const constructors = ctx.memberDeclaration().filter(member => member.constructorDeclaration()).map(member => {
       const declaration = member.constructorDeclaration();
       const flags = modifiers(declaration.methodModifier());
@@ -106,7 +110,7 @@ export function parseCsharp(source, { fileName = 'program.cs' } = {}) {
         body: readBlock(member.block()), modifiers: flags
       };
     });
-    return { token, name, methods, constructors,
+    return { token, name, methods, constructors, attributes,
       modifiers: new Set(ctx.classModifier().map(item => item.getText())) };
   }
   function readBlock(ctx) { return { kind: 'block', token: location(ctx), statements: ctx.statement().map(statement) }; }

@@ -3,6 +3,7 @@ import os from 'node:os';
 import { test } from 'node:test';
 import { installNetworkCollectors } from '../../pmachines/javascript/install-network-collectors.mjs';
 import { installPulseNodeCollector } from '../../pmachines/javascript/install-pulse-node-collector.mjs';
+import { loadFederationConfig } from '../../pmachines/javascript/federated-device-cache.mjs';
 
 const lanInterface = Object.values(os.networkInterfaces()).flat()
   .find(item => item.family === 'IPv4' && !item.internal)?.address;
@@ -12,6 +13,19 @@ const config = {
   kasaHttpPort: 4309, tuyaHttpPort: 4307, ssdpHttpPort: 4308,
   tuyaUdpPort: 6667, ssdpUdpPort: 1900
 };
+
+test('federation configuration honors the LAN interface override', { skip: !lanInterface }, async () => {
+  const previous = process.env.PULSE_LAN_INTERFACE;
+  try {
+    process.env.PULSE_LAN_INTERFACE = lanInterface;
+    assert.equal((await loadFederationConfig()).lanInterface, lanInterface);
+    process.env.PULSE_LAN_INTERFACE = '203.0.113.1';
+    await assert.rejects(loadFederationConfig(), /active lanInterface or PULSE_LAN_INTERFACE/);
+  } finally {
+    if (previous === undefined) delete process.env.PULSE_LAN_INTERFACE;
+    else process.env.PULSE_LAN_INTERFACE = previous;
+  }
+});
 
 function transport({ existing = false, failCollector = '' } = {}) {
   const installs = [], stops = [], uploads = [];
@@ -44,7 +58,7 @@ test('network deployment uploads signed service and three daemon contexts with t
   const mock = transport();
   const result = await installNetworkCollectors({ config, ...mock, logger: { log() {} } });
   assert.deepEqual(result.collectorIds, ['kasa-js', 'tuya-js', 'ssdp-js']);
-  assert.equal(mock.uploads.length, 10);
+  assert.equal(mock.uploads.length, 12);
   assert.deepEqual(mock.installs.map(item => item.httpPort), ['4309', '4307', '4308']);
   assert.ok(mock.installs.every(item => item.additional === 'true'));
   const ssdp = JSON.parse(mock.installs[2].daemons)[0];
@@ -58,16 +72,19 @@ test('network deployment uploads signed service and three daemon contexts with t
     .every(item => /^[a-f0-9]{64}$/.test(JSON.parse(item.body).signing?.signature)));
 });
 
-test('network deployment grants and compiles every configured Kasa peer, not only the first two', async () => {
-  for (const peers of [['192.168.2.76'], ['192.168.2.29', '192.168.2.28', '192.168.2.76']]) {
-    const mock = transport();
-    await installNetworkCollectors({ config: { ...config, kasaPeers: peers }, ...mock, logger: { log() {} } });
-    assert.deepEqual(JSON.parse(mock.installs[0].networkPeers), peers.map(ip => ({ ip, port: 9999 })));
-    const pcode = mock.uploads.find(item => item.file === '/network-collectors/kasa-js.pcode').body;
-    for (const peer of peers) assert.ok(pcode.includes(peer), `Missing compiled peer ${peer}`);
-  }
-  await assert.rejects(installNetworkCollectors({ config: { ...config, kasaPeers: [] } }), /1\.\.8/);
-  await assert.rejects(installNetworkCollectors({ config: { ...config, kasaPeers: ['192.168.2.28', '192.168.2.28'] } }), /distinct/);
+test('network deployment installs Kotlin Kasa discovery with a subnet broadcast grant', async () => {
+  const mock = transport();
+  await installNetworkCollectors({ config: { ...config, kasaPeers: [] }, ...mock, logger: { log() {} } });
+  const lan = Object.values(os.networkInterfaces()).flat().find(item => item.address === lanInterface);
+  const address = lan.address.split('.').map(Number), mask = lan.netmask.split('.').map(Number);
+  const broadcast = address.map((part, i) => (part & mask[i]) | (255 ^ mask[i])).join('.');
+  assert.deepEqual(JSON.parse(mock.installs[0].networkPeers), [{ ip: broadcast, port: 9999 }]);
+  assert.equal(JSON.parse(mock.installs[0].daemons)[0].udpBindAddress, lanInterface);
+  assert.equal(JSON.parse(mock.installs[0].daemons)[0].udpQueueLimit, 50);
+  const map = JSON.parse(mock.uploads.find(item => item.file === '/network-collectors/kasa-js.pcode.map.json').body);
+  assert.equal(map.runtimeUnit.id, 'kasa-collector');
+  assert.equal(map.runtimeUnit.refreshMs, 300000);
+  assert.match(mock.installs[0].serviceFile, /kasa-device-service/);
 });
 
 test('network deployment refuses existing contexts without installing replacements', async () => {

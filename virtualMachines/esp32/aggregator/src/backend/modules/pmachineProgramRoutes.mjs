@@ -21,6 +21,42 @@ export function registerPmachineProgramRoutes(app, { root, supervisor }) {
     return res.json({ slots: supervisor?.slots?.() || [], processes: supervisor?.list?.() || [] });
   });
 
+  app.post('/api/pmachine/stop-all', async (req, res) => {
+    try {
+      if (!supervisor) throw new Error('Pmachine supervisor is unavailable');
+      const processes = supervisor.list();
+      for (const process of processes) {
+        await supervisor.stop({
+          key: process.key,
+          deploymentId: process.deploymentId,
+          serviceName: process.serviceName
+        });
+      }
+      return res.json({ stopped: processes.length });
+    } catch (error) {
+      return res.status(400).json({ error: error?.message || String(error) });
+    }
+  });
+
+  app.delete('/api/pmachine/programs', async (req, res) => {
+    try {
+      if (!supervisor) throw new Error('Pmachine supervisor is unavailable');
+      const processes = supervisor.list();
+      for (const process of processes) {
+        await supervisor.stop({
+          key: process.key,
+          deploymentId: process.deploymentId,
+          serviceName: process.serviceName
+        });
+      }
+      const programs = await store.list();
+      for (const program of programs) await store.remove(program.name);
+      return res.json({ stopped: processes.length, removed: programs.map(program => program.name) });
+    } catch (error) {
+      return res.status(400).json({ error: error?.message || String(error) });
+    }
+  });
+
   app.post('/api/pmachine/programs/:name/start', async (req, res) => {
     try {
       if (!supervisor) throw new Error('Pmachine supervisor is unavailable');
@@ -59,6 +95,25 @@ export function registerPmachineProgramRoutes(app, { root, supervisor }) {
       return res.json({ status: 'stopped', slot: req.params.slot });
     } catch (error) {
       return res.status(400).json({ error: error?.message || String(error) });
+    }
+  });
+
+  app.delete('/api/pmachine/programs/:name', async (req, res) => {
+    try {
+      if (!supervisor) throw new Error('Pmachine supervisor is unavailable');
+      const manifest = await store.read(req.params.name);
+      const process = supervisor.list().find(item => item.serviceName === manifest.name);
+      if (process) {
+        await supervisor.stop({
+          key: process.key,
+          deploymentId: process.deploymentId,
+          serviceName: process.serviceName
+        });
+      }
+      return res.json({ ...(await store.remove(manifest.name)), stopped: Boolean(process) });
+    } catch (error) {
+      const status = error?.code === 'ENOENT' ? 404 : 400;
+      return res.status(status).json({ error: error?.message || String(error) });
     }
   });
 

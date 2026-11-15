@@ -24,15 +24,17 @@ const SYSTEM_BINDINGS = Object.freeze({
 });
 
 export const HOSTED_IMAGE_PROFILES = Object.freeze({
-  bounded: Object.freeze({ instructions: 512, bytes: 32768 }),
-  extended: Object.freeze({ instructions: 4096, bytes: 131072 }),
+  'storage-backed': 'storage-backed',
+  bounded: 'storage-backed',
+  extended: 'storage-backed',
 });
 
-export function encodeHostedImage(pcodeText, { profile = 'bounded' } = {}) {
-  const limits = HOSTED_IMAGE_PROFILES[profile];
-  if (!limits) throw new Error('Unknown hosted image profile');
+export function encodeHostedImage(pcodeText, { profile = 'storage-backed' } = {}) {
+  if (!Object.prototype.hasOwnProperty.call(HOSTED_IMAGE_PROFILES, profile))
+    throw new Error('Unknown hosted image profile');
   const instructions = parsePcode(pcodeText);
-  if (!instructions.length || instructions.length > limits.instructions) throw new Error('Hosted image instruction capacity exceeded');
+  if (!instructions.length || instructions.length > 0xffffffff)
+    throw new Error('Hosted image instruction count exceeds its encoding');
   const constants = [];
   const offsets = new Map();
   let constantBytes = 0;
@@ -42,7 +44,8 @@ export function encodeHostedImage(pcodeText, { profile = 'bounded' } = {}) {
     if (opcode === undefined) throw new Error(`Unsupported hosted image opcode: ${mnemonic}`);
     let value = 0, argc = 0, text = '';
     if (['JMP', 'JZ', 'CALL', 'TRY_BEGIN'].includes(mnemonic)) {
-      if (targetIndex < 0 || targetIndex >= instructions.length) throw new Error('Invalid hosted image branch target');
+      if (!Number.isInteger(targetIndex) || targetIndex < 0 || targetIndex > 0x7fffffff
+          || targetIndex >= instructions.length) throw new Error('Invalid hosted image branch target');
       value = targetIndex;
     }
     if (mnemonic === 'PUSH_INT') {
@@ -68,6 +71,8 @@ export function encodeHostedImage(pcodeText, { profile = 'bounded' } = {}) {
     if (bytes.includes(0)) throw new Error('NUL in hosted image constant');
     if (bytes.length > 2048) throw new Error('Hosted image constant capacity exceeded');
     if (!offsets.has(text)) {
+      if (constantBytes > 0xffffffff - bytes.length)
+        throw new Error('Hosted image constant pool exceeds its encoding');
       offsets.set(text, constantBytes);
       constants.push(bytes);
       constantBytes += bytes.length;
@@ -82,6 +87,5 @@ export function encodeHostedImage(pcodeText, { profile = 'bounded' } = {}) {
   });
   const image = `PHI1${instructions.length.toString(16).padStart(8, '0')}${constantBytes.toString(16).padStart(8, '0')}`
     + records.join('') + Buffer.concat(constants).toString('hex');
-  if (image.length > limits.bytes) throw new Error('Hosted image file capacity exceeded');
   return image;
 }

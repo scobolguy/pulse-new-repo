@@ -5,6 +5,7 @@
 #include <mbedtls/sha256.h>
 #include <cstring>
 #include <esp_heap_caps.h>
+#include <limits>
 #include <new>
 
 namespace pmachine {
@@ -43,12 +44,12 @@ void HostedImage::reset() {
     auto& cache = sharedCache();
     if (cache.mutex && xSemaphoreTake(cache.mutex, portMAX_DELAY) == pdTRUE) {
         for (auto& page : cache.pages) if (page.owner == this) {
-            page.owner = nullptr; page.number = MAX_PAGES; page.length = 0; page.age = 0;
+            page.owner = nullptr; page.number = INVALID_PAGE; page.length = 0; page.age = 0;
         }
         for (size_t i = 0; i < cache.psramPageCount; ++i) {
             auto& page = cache.psramPages[i];
             if (page.owner == this) {
-                page.owner = nullptr; page.number = MAX_PAGES; page.length = 0; page.age = 0;
+                page.owner = nullptr; page.number = INVALID_PAGE; page.length = 0; page.age = 0;
             }
         }
         xSemaphoreGive(cache.mutex);
@@ -63,15 +64,18 @@ bool HostedImage::open(FederatedFileSystem& ffs, const String& path, const JsonD
                        const char* key, const char* keyId, std::string& error) {
     file = ffs.openReadFile(path);
     fileBytes = file ? file.size() : 0;
-    const std::string profile = map["hostImageProfile"] | "bounded";
-    const bool extended = profile == "extended";
-    if ((!extended && profile != "bounded") || fileBytes < 20
-        || fileBytes > (extended ? PAGE_BYTES * MAX_PAGES : 32768)) {
-        error = "Invalid hosted image file size"; return false;
+    const std::string profile = map["hostImageProfile"] | "storage-backed";
+    if ((profile != "storage-backed" && profile != "bounded" && profile != "extended")
+        || fileBytes < 20) {
+        error = "Invalid hosted image profile or file size"; return false;
     }
-    const size_t pages = (fileBytes + PAGE_BYTES - 1) / PAGE_BYTES;
+    const size_t pages = fileBytes / PAGE_BYTES + (fileBytes % PAGE_BYTES != 0);
+    if (pages > std::numeric_limits<size_t>::max() / sizeof(hashes[0])) {
+        error = "Hosted image page metadata exceeds addressable storage"; return false;
+    }
     const size_t hashBytes = pages * sizeof(hashes[0]);
-    if (ESP.getFreeHeap() < hashBytes + 32768
+    if (hashBytes > std::numeric_limits<size_t>::max() - 32768
+        || ESP.getFreeHeap() < hashBytes + 32768
         || heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < hashBytes + 4096) {
         error = "Insufficient heap for authenticated hosted image pages"; return false;
     }
@@ -92,12 +96,13 @@ bool HostedImage::open(FederatedFileSystem& ffs, const String& path, const JsonD
     bool ok = info && mbedtls_md_setup(&context, info, 1) == 0
         && mbedtls_md_hmac_starts(&context, reinterpret_cast<const uint8_t*>(key), strlen(key)) == 0;
     std::array<uint8_t, PAGE_BYTES> buffer;
-    for (size_t offset = 0; ok && offset < fileBytes; offset += PAGE_BYTES) {
+    for (size_t offset = 0; ok && offset < fileBytes;) {
         const size_t length = std::min(PAGE_BYTES, fileBytes - offset);
         ok = file.read(buffer.data(), length) == length
             && mbedtls_md_hmac_update(&context, buffer.data(), length) == 0
             && mbedtls_sha256_ret(buffer.data(), length, hashes[offset / PAGE_BYTES].data(), 0) == 0;
         if (ok && resident) memcpy(resident.get() + offset, buffer.data(), length);
+        offset += length;
     }
     uint8_t digest[32];
     ok = ok && mbedtls_md_hmac_finish(&context, digest) == 0;
@@ -111,10 +116,14 @@ bool HostedImage::open(FederatedFileSystem& ffs, const String& path, const JsonD
     uint32_t instructionCount, constants;
     if (!readBytes(0, magic, 4, error)
         || !hex(4, 8, instructionCount, error) || !hex(12, 8, constants, error)) return false;
-    if (memcmp(magic, "PHI1", 4) || instructionCount < 1 || instructionCount > (extended ? 4096 : 512)
-        || constants > (PAGE_BYTES * MAX_PAGES - 20) / 2
-        || fileBytes != 20 + instructionCount * 24 + constants * 2) {
+    if (memcmp(magic, "PHI1", 4) || instructionCount < 1
+        || instructionCount > (fileBytes - 20) / 24) {
         error = "Invalid hosted image header"; return false;
+    }
+    const size_t constantPoolOffset = 20 + static_cast<size_t>(instructionCount) * 24;
+    const size_t constantPoolCharacters = fileBytes - constantPoolOffset;
+    if ((constantPoolCharacters & 1) || constants != constantPoolCharacters / 2) {
+        error = "Invalid hosted image constant pool size"; return false;
     }
     count = instructionCount; poolBytes = constants;
     if (resident) file.close();
@@ -152,7 +161,7 @@ bool HostedImage::readBytes(size_t offset, uint8_t* target, size_t length, std::
         if (page->owner == this && page->number == number) ++cacheHits;
         else {
             page->owner = nullptr;
-            page->number = MAX_PAGES;
+            page->number = INVALID_PAGE;
             page->length = std::min(PAGE_BYTES, fileBytes - number * PAGE_BYTES);
             uint8_t digest[32];
             if (file.size() != fileBytes || !file.seek(number * PAGE_BYTES)

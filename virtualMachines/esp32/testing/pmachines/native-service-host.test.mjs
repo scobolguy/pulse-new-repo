@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -6,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { compilePascalishProgramWithAntlr } from '../../aggregator/scripts/compile-pascalish-program-antlr-to-pcode.mjs';
+import { compileKotlinToPcode } from '../../../../languages/kotlin/src/compile-kotlin-to-pcode.mjs';
 import { createPascalishServiceHost } from '../../pmachines/javascript/src/service-host.mjs';
 
 const workspaceRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -112,6 +114,20 @@ async function jsonRequest(origin, route, method = 'GET', body) {
   return { status: response.status, body: await response.json() };
 }
 
+async function listen(server) {
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  return `http://127.0.0.1:${server.address().port}`;
+}
+
+async function close(server) {
+  if (!server?.listening) return;
+  server.closeAllConnections();
+  await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+}
+
 test('one native-target service artifact has matching Node and native HTTP behavior', async t => {
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'pulse-native-service-'));
   let jsHost;
@@ -120,6 +136,9 @@ test('one native-target service artifact has matching Node and native HTTP behav
   let nativeFilesystem;
   let nativeLimited;
   let nativeDebugger;
+  let nativeVirtualCache;
+  let cacheAggregator;
+  let cacheSource;
   try {
     const buildRoot = path.join(tempRoot, 'build');
     run('cmake', ['-S', nativeRoot, '-B', buildRoot, '-G', 'Ninja']);
@@ -177,6 +196,89 @@ test('one native-target service artifact has matching Node and native HTTP behav
     assert.equal(status.body.serviceId, 'native-parity');
     assert.equal(status.body.capabilities.runtime, 'native');
     assert.deepEqual(status.body.capabilities.supported, []);
+
+    let sourceAvailable = true;
+    let resolutions = 0;
+    let sourceRevision = '7';
+    const sourceRecords = Array.from({ length: 5 }, (_, index) => ({
+      key: `camera-${index + 1}`, device: { id: `camera-${index + 1}` },
+      observationMs: 90 + index, observationSequence: 4 + index, remainingTTLms: 500 - index
+    }));
+    cacheSource = http.createServer((req, res) => {
+      if (!sourceAvailable) {
+        const body = '{"error":"offline"}';
+        res.writeHead(503, {
+          'content-type': 'application/json', 'content-length': Buffer.byteLength(body)
+        }).end(body);
+        return;
+      }
+      const url = new URL(req.url, 'http://source.test');
+      if (url.searchParams.has('revision') && url.searchParams.get('revision') !== sourceRevision) {
+        const body = '{"error":"revision changed"}';
+        res.writeHead(409, {
+          'content-type': 'application/json', 'content-length': Buffer.byteLength(body)
+        }).end(body);
+        return;
+      }
+      const cursor = url.searchParams.get('cursor') || '';
+      const start = cursor ? sourceRecords.findIndex(record => record.key === cursor) + 1 : 0;
+      const records = sourceRecords.slice(start, start + 2);
+      const nextCursor = start + records.length < sourceRecords.length ? records.at(-1).key : '';
+      const body = JSON.stringify({
+        version: 1, revision: sourceRevision, sequence: Number(sourceRevision), sampledAtMs: 100,
+        total: sourceRecords.length, records, nextCursor,
+        collectorId: 'camera-node', bootId: 'camera-boot', complete: true, errors: []
+      });
+      res.writeHead(200, {
+        'content-type': 'application/json', 'content-length': Buffer.byteLength(body)
+      }).end(body);
+    });
+    const cacheSourceUrl = await listen(cacheSource);
+    cacheAggregator = http.createServer((_req, res) => {
+      resolutions += 1;
+      const body = JSON.stringify({
+        serviceId: 'camera-service', cacheName: 'devices',
+        snapshotUrl: `${cacheSourceUrl}/api/hosted/caches/devices/snapshot`, instanceId: 'camera-instance'
+      });
+      res.writeHead(200, {
+        'content-type': 'application/json', 'content-length': Buffer.byteLength(body)
+      }).end(body);
+    });
+    const cacheAggregatorUrl = await listen(cacheAggregator);
+    const virtualCacheCompiled = compileKotlinToPcode(`import pulse.http.*
+      @VirtualCache(name = "all-cameras", sources = "camera=camera-service/devices",
+        fields = "cameraId:string",
+        query = "SELECT cache_key AS cameraId FROM camera WHERE observation_sequence >= 5 ORDER BY cameraId DESC LIMIT 10")
+      class AllCameras {}
+      @HttpGet("/health")
+      fun health(): String = "{\\"status\\":\\"ok\\"}"
+      `, { fileName: 'native-virtual-cache.kt', target: 'native' });
+    const cacheArtifact = await writeArtifact(tempRoot, virtualCacheCompiled, 'virtual-cache');
+    nativeVirtualCache = await launchNative(executable, cacheArtifact.pcodePath, cacheArtifact.mapPath,
+      ['--aggregator-url', cacheAggregatorUrl]);
+    const completeCachePage = await jsonRequest(nativeVirtualCache.origin,
+      '/api/hosted/caches/all-cameras/snapshot');
+    assert.equal(completeCachePage.status, 200);
+    assert.equal(completeCachePage.body.complete, true, JSON.stringify(completeCachePage.body));
+    assert.deepEqual(completeCachePage.body.records.map(record => record.device.cameraId),
+      ['camera-5', 'camera-4']);
+    assert.equal(completeCachePage.body.nextCursor, 'q:1');
+    const secondCachePage = await jsonRequest(nativeVirtualCache.origin,
+      `/api/hosted/caches/all-cameras/snapshot?cursor=${encodeURIComponent(completeCachePage.body.nextCursor)}&revision=${completeCachePage.body.revision}`);
+    assert.equal(secondCachePage.status, 200);
+    assert.deepEqual(secondCachePage.body.records.map(record => record.device.cameraId),
+      ['camera-3', 'camera-2']);
+    sourceRevision = '8';
+    const changedCachePage = await jsonRequest(nativeVirtualCache.origin,
+      `/api/hosted/caches/all-cameras/snapshot?cursor=${encodeURIComponent(secondCachePage.body.nextCursor)}&revision=${secondCachePage.body.revision}`);
+    assert.equal(changedCachePage.status, 409);
+    sourceAvailable = false;
+    const partialCachePage = await jsonRequest(nativeVirtualCache.origin,
+      '/api/hosted/caches/all-cameras/snapshot');
+    assert.equal(partialCachePage.status, 200);
+    assert.equal(partialCachePage.body.complete, false);
+    assert.equal(partialCachePage.body.errors[0].alias, 'camera');
+    assert.equal(resolutions, 4, 'native host resolves each logical source for every snapshot read');
 
     const unsupportedSource = `service 'native-parity';
       get '/run'; begin return host.xml_parse(host.event_body()) end
@@ -351,7 +453,7 @@ test('one native-target service artifact has matching Node and native HTTP behav
     if (nativeDebugger && nativeDebugger.child.exitCode === null && nativeDebugger.child.signalCode === null) {
       nativeDebugger.child.kill();
     }
-    for (const instance of [native, nativeFilesystem, nativeLimited]) {
+    for (const instance of [native, nativeFilesystem, nativeLimited, nativeVirtualCache]) {
       if (instance && instance.child.exitCode === null && instance.child.signalCode === null) {
         instance.child.kill();
         await Promise.race([instance.exited, new Promise(resolve => setTimeout(resolve, 2000))]);
@@ -359,6 +461,8 @@ test('one native-target service artifact has matching Node and native HTTP behav
     }
     if (jsHost) await jsHost.stop();
     if (jsFilesystemHost) await jsFilesystemHost.stop();
+    await close(cacheAggregator);
+    await close(cacheSource);
     await rm(tempRoot, { recursive: true, force: true });
   }
 });

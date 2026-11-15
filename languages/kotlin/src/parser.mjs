@@ -2,6 +2,8 @@ import antlr4 from 'antlr4';
 import KotlinLexer from '../grammar/generated/KotlinLexer.js';
 import KotlinParser from '../grammar/generated/KotlinParser.js';
 import { fail } from '../../dotnet/source-diagnostics.mjs';
+import { cacheConstraintError, parseCacheFields } from '../../dotnet/cache-schema.mjs';
+import { parseCacheQuery, parseVirtualCacheSources } from '../../dotnet/cache-query.mjs';
 
 const ruleName = (parser, ctx) => ctx?.symbol ? null : parser.ruleNames[ctx?.ruleIndex];
 const ruleChildren = ctx => (ctx.children || []).filter(child => !child.symbol && child.ruleIndex != null);
@@ -10,6 +12,7 @@ const httpAnnotations = {
   HttpGet: 'GET', HttpPost: 'POST', HttpPut: 'PUT', HttpPatch: 'PATCH',
   HttpDelete: 'DELETE', HttpHead: 'HEAD', HttpOptions: 'OPTIONS'
 };
+const metadataAnnotations = new Set(['Daemon', 'Cache', 'VirtualCache']);
 
 const SCALAR_TYPE_NAMES = {
   Byte: 'sbyte', Short: 'short', Int: 'int', Boolean: 'bool', String: 'string', Unit: 'void',
@@ -1015,6 +1018,24 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
   const pendingExtensions = [];
   const globalsInitStatements = [];
   const endpoints = [];
+  const runtimeDeclarations = [];
+  const cacheDeclarations = [];
+  const virtualCacheDeclarations = [];
+  function metadataAnnotation(annotation, expectedName) {
+    const name = annotation.qualifiedIdentifier().getText().replace(/^pulse\.(?:runtime|cache)\./, '');
+    if (name !== expectedName) return null;
+    if (annotation.typeArguments() || annotation.identifier())
+      fail(location(annotation), `@${expectedName} does not accept type arguments or use-site targets`);
+    const values = {};
+    for (const argument of annotation.valueArguments()?.valueArgument() || []) {
+      if (!argument.identifier()) fail(location(argument), `@${expectedName} arguments must be named`);
+      const value = expression(argument.expression());
+      if (!['string', 'int'].includes(value.literalType))
+        fail(location(argument), `@${expectedName} arguments must be literal strings or integers`);
+      values[argument.identifier().getText()] = value.literalType === 'int' ? Number(value.value) : value.value;
+    }
+    return values;
+  }
   for (const declaration of tree.topLevelDeclaration()) {
     const modifiers = declaration.declarationModifier();
     if (declaration.functionDeclaration()) {
@@ -1037,6 +1058,18 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
         }
         const annotationName = annotation.qualifiedIdentifier().getText().replace(/^pulse\.http\./, '');
         const verb = httpAnnotations[annotationName];
+        const daemon = metadataAnnotation(annotation, 'Daemon');
+        if (daemon) {
+          if (method.name !== 'Main' || method.params.length || method.returnType.name !== 'void')
+            fail(method.token, '@Daemon must annotate a parameterless fun main() returning Unit');
+          const id = daemon.id;
+          const refreshMs = daemon.refreshMs;
+          if (typeof id !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(id)
+            || !Number.isSafeInteger(refreshMs) || refreshMs < 10 || refreshMs > 300000)
+            fail(location(annotation), '@Daemon requires id and refreshMs between 10 and 300000');
+          runtimeDeclarations.push({ kind: 'daemon', id, refreshMs });
+          continue;
+        }
         if (!verb) continue; // Unknown annotations carry no runtime behavior here.
         if (annotation.typeArguments() || annotation.identifier())
           fail(location(modifier), `@${annotationName} does not accept type arguments or use-site targets`);
@@ -1079,6 +1112,78 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
       }
     } else if (declaration.classDeclaration()) {
       const owner = readClass(declaration.classDeclaration());
+      for (const modifier of modifiers) {
+        const annotation = modifier.annotation?.();
+        if (!annotation) continue;
+        const cache = metadataAnnotation(annotation, 'Cache');
+        if (cache) {
+          if (typeof cache.name !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(cache.name)
+            || cache.capacity !== 50
+            || !Number.isSafeInteger(cache.ttlMs) || cache.ttlMs < 1)
+            fail(location(annotation), '@Cache requires a name, capacity 50, and positive ttlMs');
+          const storage = cache.storage || 'RAM';
+          const mode = cache.mode || 'PERSISTENT';
+          const uniqueBy = cache.uniqueBy || '';
+          const latestBy = cache.latestBy || '';
+          const parsedFields = parseCacheFields(cache.fields);
+          if (parsedFields.error) fail(location(annotation), parsedFields.error);
+          const query = cache.query || '';
+          const parsedViewFields = cache.viewFields
+            ? parseCacheFields(cache.viewFields) : { fields: parsedFields.fields, error: null };
+          if (parsedViewFields.error) fail(location(annotation), parsedViewFields.error);
+          if (!query && cache.viewFields)
+            fail(location(annotation), '@Cache viewFields requires a read-only query');
+          if (!['RAM', 'FFS'].includes(storage) || !['PERSISTENT', 'UPDATEABLE'].includes(mode))
+            fail(location(annotation), '@Cache storage must be RAM or FFS and mode must be PERSISTENT or UPDATEABLE');
+          const constraintError = cacheConstraintError(parsedFields.fields, uniqueBy, latestBy);
+          if (constraintError) fail(location(annotation), constraintError);
+          let queryPlan;
+          try {
+            queryPlan = parseCacheQuery(query, {
+              cacheName: cache.name, fields: parsedFields.fields,
+              viewFields: parsedViewFields.fields
+            });
+          } catch (error) { fail(location(annotation), error.message); }
+          cacheDeclarations.push({ name: cache.name, capacity: cache.capacity, ttlMs: cache.ttlMs, storage, mode,
+            fields: parsedFields.fields,
+            ...(uniqueBy ? { uniqueBy } : {}), ...(latestBy ? { latestBy } : {}),
+            ...(query ? { query, viewFields: parsedViewFields.fields, queryPlan } : {}) });
+          continue;
+        }
+        const virtual = metadataAnnotation(annotation, 'VirtualCache');
+        if (!virtual) continue;
+        let sources;
+        try { sources = parseVirtualCacheSources(virtual.sources); }
+        catch (error) { fail(location(annotation), error.message); }
+        if (typeof virtual.name !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(virtual.name))
+          fail(location(annotation), '@VirtualCache requires a valid name');
+        const query = virtual.query || '';
+        const parsedFields = virtual.fields
+          ? parseCacheFields(virtual.fields) : { fields: [], error: null };
+        if (parsedFields.error) fail(location(annotation), parsedFields.error);
+        if (sources.some(source => !source.local) && !query)
+          fail(location(annotation), '@VirtualCache remote sources require a read-only query');
+        if (query && !parsedFields.fields.length)
+          fail(location(annotation), '@VirtualCache queries require a fields result schema');
+        const storage = virtual.storage || 'RAM';
+        const mode = virtual.mode || 'PERSISTENT';
+        if (!['RAM', 'FFS'].includes(storage) || !['PERSISTENT', 'UPDATEABLE'].includes(mode))
+          fail(location(annotation), '@VirtualCache storage must be RAM or FFS and mode must be PERSISTENT or UPDATEABLE');
+        let queryPlan;
+        try {
+          queryPlan = parseCacheQuery(query, {
+            cacheName: virtual.name, fields: [], viewFields: parsedFields.fields,
+            virtual: true, sources
+          });
+        } catch (error) { fail(location(annotation), error.message); }
+        virtualCacheDeclarations.push({
+          name: virtual.name,
+          sources: sources.map(source => source.local
+            ? source.cacheName : `${source.alias}=${source.serviceId}/${source.cacheName}`),
+          sourceDefinitions: sources, capacity: 50, fields: parsedFields.fields, storage, mode,
+          ...(query ? { query, queryPlan } : {})
+        });
+      }
       classes.push(owner);
       functions.push(...owner.constructors, ...owner.methods.filter(method => method.owner === 'Program'));
     } else if (declaration.objectDeclaration()) {
@@ -1139,7 +1244,7 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
   const imports = tree.importHeader();
   const supportedImports = [
     'importkotlin.io.*', 'importkotlin.io.println', 'importpulse.http.HttpGet',
-    'importpulse.net.*', 'importpulse.net.networkDiscoveryStep',
+    'importpulse.net.*', 'importpulse.net.networkDiscoveryStep', 'importpulse.host.*',
     'importpulse.process.*',
     'importpulse.pmachine.*',
     'importkotlin.test.*', 'importkotlin.test.assertEquals',
@@ -1150,8 +1255,13 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
     'importpulse.http.*', 'importpulse.net.*', 'importpulse.process.*',
     ...['requestBody', 'requestMethod', 'requestPath', 'requestPeer', 'requestQuery', 'requestHeader']
       .map(name => `importpulse.http.${name}`),
-    ...['tcpExchange', 'udpExchange', 'localIpv4Subnets', 'kasaDiscover', 'cameraDiscover']
+    ...['tcpExchange', 'udpExchange', 'udpSend', 'networkPeerAllowed', 'localIpv4Subnets', 'kasaDiscover', 'cameraDiscover']
       .map(name => `importpulse.net.${name}`),
+    ...['eventMethod', 'eventPeer', 'eventPort', 'eventBytes', 'bytesLength', 'bytesGet', 'byteXor',
+      'bufferCreate', 'bufferAppend', 'bufferJsonPathText', 'bufferJsonPathInteger', 'bufferRelease',
+      'jsonArrayGet', 'jsonArrayCount', 'jsonText', 'jsonSetText', 'jsonSetInteger', 'jsonEmbed',
+      'jsonAppendText', 'cacheCount', 'cacheNext', 'cacheGet', 'cachePut',
+      'cacheSnapshot', 'raiseError'].map(name => `importpulse.host.${name}`),
     ...['networkReady', 'installBundle', 'start', 'stop', 'status', 'checkpoint', 'restore', 'bootFixed']
       .map(name => `importpulse.pmachine.${name}`)
   ];
@@ -1185,6 +1295,9 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
   return {
     token: location(tree),
     endpoints,
+    runtimeDeclarations,
+    cacheDeclarations,
+    virtualCacheDeclarations,
     hostImports: imports.map(item => item.getText()),
     usingSystem: true,
     classes: [{

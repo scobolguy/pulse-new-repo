@@ -5,7 +5,7 @@ compilationUnit
   ;
 usingDirective : USING qualifiedName SEMI;
 namespaceDeclaration : NAMESPACE qualifiedName LBRACE classDeclaration* RBRACE;
-classDeclaration : classModifier* CLASS identifier LBRACE memberDeclaration* RBRACE;
+classDeclaration : attributeSection* classModifier* CLASS identifier LBRACE memberDeclaration* RBRACE;
 classModifier : PUBLIC | INTERNAL | STATIC | SEALED;
 memberDeclaration
   : constructorDeclaration

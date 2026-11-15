@@ -5,6 +5,7 @@ import { compileScalarToPcode } from '../../dotnet/compile-scalar-to-pcode.mjs';
 import { fail } from '../../dotnet/source-diagnostics.mjs';
 import { prepareScalarImports, linkScalarLibraries } from '../../dotnet/scalar-library.mjs';
 import { PULSE_NETWORK_IMPORTS } from '../../dotnet/pulse-network-library.mjs';
+import { cacheConstraintError, parseCacheFields } from '../../dotnet/cache-schema.mjs';
 
 const typeNames = { integer: 'int', sbyte: 'sbyte', byte: 'byte', short: 'short', ushort: 'ushort', boolean: 'bool', string: 'string' };
 const normalized = text => text.replace(/^\[|\]$/g, '').toLowerCase();
@@ -29,11 +30,39 @@ export function parseVb11(source, { fileName = 'program.vb' } = {}) {
 }
 
 export function compileVb11ToPcode(source, { fileName = 'program.vb', libraries = [], target = 'js' } = {}) {
+  const cacheDeclarations = [...String(source).matchAll(/^\s*PULSE\s+CACHE\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))\s+CAPACITY\s+(\d+)\s+EVERY\s+(\d+)\s+(MS|S|M|SECOND|SECONDS)(?:\s+STORAGE\s+(RAM|FFS))?(?:\s+MODE\s+(PERSISTENT|UPDATEABLE))?(?:\s+FIELDS\s+(?:"([^"]+)"|'([^']+)'))?(?:\s+UNIQUE\s+BY\s+([A-Za-z_][A-Za-z0-9_]*))?(?:\s+LATEST\s+BY\s+([A-Za-z_][A-Za-z0-9_]*))?\s*$/gim)]
+    .map(match => {
+      const schema = match[9] || match[10];
+      const parsed = schema ? parseCacheFields(schema) : { fields: [], error: null };
+      if (parsed.error) fail({ fileName, sourceLanguage: 'vbish', line: 1, column: 1 }, parsed.error);
+      const uniqueBy = match[11] || '';
+      const latestBy = match[12] || '';
+      const constraintError = parsed.fields.length ? cacheConstraintError(parsed.fields, uniqueBy, latestBy) : null;
+      if (constraintError) fail({ fileName, sourceLanguage: 'vbish', line: 1, column: 1 }, constraintError);
+      const cache = {
+        name: String(match[1] || match[2] || match[3] || ''),
+        capacity: Number(match[4]),
+        ttlMs: Number(match[5]) * ({ MS: 1, S: 1000, SECOND: 1000, SECONDS: 1000, M: 60000 }[match[6].toUpperCase()] || 1),
+        storage: match[7] || 'RAM', mode: match[8] || 'PERSISTENT', fields: parsed.fields,
+        ...(uniqueBy ? { uniqueBy } : {}), ...(latestBy ? { latestBy } : {})
+      };
+      if (cache.capacity !== 50) fail({ fileName, sourceLanguage: 'vbish', line: 1, column: 1 }, 'PULSE CACHE capacity must be 50');
+      return cache;
+    });
+  const runtimeMatch = /^\s*PULSE\s+(DAEMON|SERVICE|PROGRAM)\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))(?:\s+EVERY\s+(\d+)\s+(MS|S|M|SECOND|SECONDS))?/im.exec(source);
+  const runtime = runtimeMatch ? {
+    kind: runtimeMatch[1].toLowerCase(),
+    id: String(runtimeMatch[2] || runtimeMatch[3] || runtimeMatch[4] || ''),
+    refreshMs: runtimeMatch[5]
+      ? Number(runtimeMatch[5]) * ({ MS: 1, S: 1000, SECOND: 1000, SECONDS: 1000, M: 60000 }[runtimeMatch[6].toUpperCase()] || 1)
+      : null
+  } : null;
+  const sourceForParser = String(source).replace(/^\s*PULSE\s+(?:VIRTUAL\s+CACHE|CACHE|DAEMON|SERVICE|PROGRAM)\b.*$/gim, '');
   const imports = [
     ...PULSE_NETWORK_IMPORTS.map(item => ({ ...item, key: item.key.toLowerCase() })),
     ...prepareScalarImports(libraries, 'vbish', target)
   ];
-  const tree = parseVb11(source, { fileName });
+  const tree = parseVb11(sourceForParser, { fileName });
   const token = ctx => {
     const start = ctx.start || ctx.symbol || ctx;
     return { fileName, sourceLanguage: 'vbish', line: start.line, column: start.column + 1, value: start.text };
@@ -268,6 +297,30 @@ export function compileVb11ToPcode(source, { fileName = 'program.vb', libraries 
   });
   artifact.languageProfile = 'vb11-scalar';
   artifact.programMap.languageProfile = 'vb11-scalar';
+  if (runtime) {
+    if (!['daemon', 'service', 'program'].includes(runtime.kind) || !runtime.id)
+      throw new Error('[VB11] Invalid PULSE runtime declaration');
+    artifact.programMap.runtimeUnit = runtime;
+    artifact.runtimeUnit = runtime;
+  }
+  const virtualCacheDeclarations = [...String(source).matchAll(
+    /^\s*PULSE\s+VIRTUAL\s+CACHE\s+(?:"([^"]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))\s+SOURCES\s+(?:"([^"]+)"|'([^']+)')(?:\s+STORAGE\s+(RAM|FFS))?(?:\s+MODE\s+(PERSISTENT|UPDATEABLE))?\s*$/gim,
+  )].map(match => ({
+      name: String(match[1] || match[2] || match[3] || ''),
+      sources: String(match[4] || match[5] || '').split(',').map(source => source.trim()).filter(Boolean),
+      capacity: 50, fields: [], virtual: true, storage: match[6] || 'RAM', mode: match[7] || 'PERSISTENT'
+    }));
+  const cacheNames = [...cacheDeclarations, ...virtualCacheDeclarations].map(cache => cache.name);
+  if (new Set(cacheNames).size !== cacheNames.length) throw new Error('[VB11] Cache names must be unique within a node');
+  if (virtualCacheDeclarations.some(cache => cache.sources.length < 1
+    || cache.sources.some(source => !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(source))))
+    throw new Error('[VB11] PULSE VIRTUAL CACHE requires valid sources');
+  if (cacheDeclarations.length || virtualCacheDeclarations.length) {
+    artifact.programMap.hostCaches = [
+      ...cacheDeclarations,
+      ...virtualCacheDeclarations
+    ];
+  }
   artifact.native = { valid: true, syntaxErrors: [], syntaxErrorCount: 0, interop: [] };
   return linkScalarLibraries(artifact, libraries);
 }

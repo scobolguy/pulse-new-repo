@@ -105,7 +105,7 @@ public:
              uint32_t ttl, uint64_t time, std::string& error) override {
         if (ttl < 1 || ttl > 2147483647 || key.empty() || key.size() > 256
             || key.find_first_not_of(" \t\r\n") == std::string::npos || json.size() > 2048
-            || (caches.count(name) == 0 && caches.size() >= 2)) {
+            || (caches.count(name) == 0 && caches.size() >= 16)) {
             error = "Invalid cache key, item, TTL or cache capacity"; return false;
         }
         expire(time);

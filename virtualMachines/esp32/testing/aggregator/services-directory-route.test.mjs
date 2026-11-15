@@ -34,6 +34,18 @@ test('gateway services route exposes Librarian, Mapper, servers and discovered r
     assert.equal(result.services.some(service => service.serviceId === 'named-service' && service.nodeId === 'js-test'), true);
     assert.equal(result.servers.some(server => server.name === 'Local Pulse Workspace'), true);
     assert.deepEqual(result.errors, []);
+    let resolution;
+    await routes.get('/api/cache-services/:serviceId/caches/:cacheName/snapshot')({
+      params: { serviceId: 'named-service', cacheName: 'devices' },
+      protocol: 'http', get: () => '127.0.0.1:4000'
+    }, {
+      json(body) { resolution = body; },
+      status(code) { assert.fail(`Unexpected cache resolver HTTP ${code}`); },
+    });
+    assert.equal(resolution.serviceId, 'named-service');
+    assert.equal(resolution.cacheName, 'devices');
+    assert.equal(resolution.snapshotUrl, 'http://127.0.0.1:49999/api/hosted/caches/devices/snapshot');
+    assert.equal(resolution.instanceId.includes('named-service'), true);
   } finally {
     globalThis.fetch = originalFetch;
     for (const [key, value] of [['PULSE_DISCOVERY_COLLECTOR_URLS', originalCollectors], ['PULSE_DISCOVERY_MODE', originalMode]]) {

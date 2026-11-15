@@ -52,7 +52,7 @@ try {
     assert.equal((await request(`/ffs/get?file=${encodeURIComponent(file)}`)).status, 404,
       `Refusing to overwrite ${file}`);
   }
-  const example = await fs.readFile(new URL('../../../../languages/kotlin/examples/kasa-discovery-daemon.kt', import.meta.url), 'utf8');
+  const example = await fs.readFile(new URL('../../../../languages/kotlin/examples/kasa-probe-service.kt', import.meta.url), 'utf8');
   const serviceSource = example.replace('const val KASA_DISCOVERY_PORT = 9999', `const val KASA_DISCOVERY_PORT = ${port}`)
     + '\n@HttpPost("/api/kasa/action")\nfun testAction(): String = requestBody()\n';
   const units = [

@@ -90,8 +90,14 @@ The Tuya context listens on all IPv4 interfaces on encrypted discovery UDP
 write into the same cache. HTTP remains loopback-only.
 Tuya discovery sockets use shared UDP binds so other compatible broadcast
 listeners can coexist; this does not promise duplicate delivery of unicast.
-Kasa polls the 1..8 distinct IPv4 addresses in `kasaPeers` using read-only `get_sysinfo` requests,
-with a refresh interval that keeps all peers within the observation TTL.
+The Pulse Kotlin Kasa daemon broadcasts read-only legacy `get_sysinfo` on the
+selected LAN interface at startup and every five minutes. Set
+`PULSE_LAN_INTERFACE` to its IPv4 address if automatic selection is ambiguous.
+It caches up to 50 devices with a six-minute TTL; newer authenticated Kasa/Tapo
+protocols and devices outside that local subnet are not covered. The Kasa
+source is marked incomplete after a daemon failure or dropped/shed datagram
+until the collector is restarted. Shared UDP binds do not guarantee duplicate
+delivery of unicast Kasa replies to both collector sets.
 The backend registry also contains configured and HTTP-registered nodes:
 those are not evidence of independent UDP discovery and need not appear in
 the distributed cache. Successful source synchronization does not prove that

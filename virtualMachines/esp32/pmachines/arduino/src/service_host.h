@@ -20,16 +20,27 @@ namespace pmachine {
 class ServiceHost {
 public:
     struct Unit {
+        struct CachePolicy {
+            std::string storage, mode, uniqueBy, latestBy;
+            bool operator==(const CachePolicy& other) const {
+                return storage == other.storage && mode == other.mode
+                    && uniqueBy == other.uniqueBy && latestBy == other.latestBy;
+            }
+            bool operator!=(const CachePolicy& other) const { return !(*this == other); }
+        };
         std::unique_ptr<std::deque<PInstruction>> instructions;
         std::shared_ptr<HostedImage> image;
         std::map<std::string, std::vector<std::string>> signatures;
         std::vector<MappingDef> mappings;
         std::map<std::string, uint8_t> tableCapacities;
         std::map<std::string, std::map<std::string, std::string>> cacheSchemas;
+        std::map<std::string, std::vector<std::string>> cacheVirtualSources;
+        std::map<std::string, CachePolicy> cachePolicies;
         bool hasTableDeclarations = false;
         bool requiresAggregatorTransaction = false;
         bool internalPolicy = false;
         uint32_t interval = 0;
+        std::string id;
         std::vector<std::pair<std::string, std::string>> endpoints;
         std::vector<std::string> requiredServices;
     };

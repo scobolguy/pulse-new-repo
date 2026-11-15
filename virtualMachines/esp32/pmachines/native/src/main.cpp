@@ -45,6 +45,7 @@ struct Options {
     int port = 0;
     uint64_t maxSteps = 0;
     uint64_t maxFileBytes = 262144;
+    std::string aggregatorUrl;
     bool debug = false;
     std::map<std::string, pulse::native::StorageRootGrant> storageRoots;
 };
@@ -102,6 +103,7 @@ void addStorageRoot(Options& options, const std::string& value, bool readOnly) {
 
 Options parseOptions(int argc, char** argv) {
     Options options;
+    if (const char* value = std::getenv("PULSE_AGGREGATOR_URL")) options.aggregatorUrl = value;
     for (int i = 1; i < argc; ++i) {
         const std::string argument = argv[i];
         auto next = [&]() -> std::string {
@@ -114,6 +116,7 @@ Options parseOptions(int argc, char** argv) {
         else if (argument == "--port") options.port = parsePort(next(), "--port", 65535);
         else if (argument == "--max-steps") options.maxSteps = parseBudget(next());
         else if (argument == "--max-file-bytes") options.maxFileBytes = parsePositiveSize(next(), "--max-file-bytes");
+        else if (argument == "--aggregator-url") options.aggregatorUrl = next();
         else if (argument == "--debug") options.debug = true;
         else if (argument == "--storage-root") addStorageRoot(options, next(), true);
         else if (argument == "--writable-storage-root") addStorageRoot(options, next(), false);
@@ -121,7 +124,7 @@ Options parseOptions(int argc, char** argv) {
             std::cout << "Usage: pulse_native_service_host --pcode FILE --program-map FILE "
                          "[--host ADDRESS] [--port 0..65535] [--max-steps N] [--debug] "
                          "[--max-file-bytes N] [--storage-root ALIAS=ABSOLUTE_PATH] "
-                         "[--writable-storage-root ALIAS=ABSOLUTE_PATH]\n";
+                         "[--writable-storage-root ALIAS=ABSOLUTE_PATH] [--aggregator-url HTTP_URL]\n";
             std::exit(0);
         } else throw std::runtime_error("Unknown option: " + argument);
     }
@@ -235,6 +238,7 @@ ParsedRequest readRequest(Socket client, const sockaddr_in& peer, uint64_t maxBo
     }
     const auto query = target.find('?');
     result.request.path = target.substr(0, query);
+    if (query != std::string::npos) result.request.query = target.substr(query + 1);
 
     size_t contentLength = 0;
     bool hasContentLength = false;
@@ -305,6 +309,7 @@ std::string statusText(int status) {
         case 202: return "Accepted";
         case 204: return "No Content";
         case 400: return "Bad Request";
+        case 409: return "Conflict";
         case 404: return "Not Found";
         case 405: return "Method Not Allowed";
         case 413: return "Payload Too Large";
@@ -438,7 +443,8 @@ int main(int argc, char** argv) {
             pulse::native::readFile(options.programMap),
             options.maxSteps,
             options.storageRoots,
-            options.maxFileBytes);
+            options.maxFileBytes,
+            options.aggregatorUrl);
         if (options.debug) {
             service.debugDispatch(std::cin, std::cout);
             return 0;

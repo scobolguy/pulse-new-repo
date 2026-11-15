@@ -12,7 +12,7 @@ import { timingSafeEqual, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { PMachineScheduler, runSingleMessageForEvolution } from './index.mjs';
 import { normalizeDiscoveryAnnouncement } from './discovery-collector.mjs';
-import { createPascalishServiceHost } from './src/service-host.mjs';
+import { createAggregatorCacheSourceResolver, createPascalishServiceHost } from './src/service-host.mjs';
 import { createInventoryClient } from './src/inventory-client.mjs';
 import { createWindowsBluetoothSource } from './src/bluetooth-source.mjs';
 import { signPcodeText } from '../../aggregator/scripts/pcode-signing.mjs';
@@ -36,6 +36,7 @@ function parseCliArgs(argv) {
     host: process.env.JS_PMACHINE_BIND || '0.0.0.0',
     name: process.env.JS_PMACHINE_NAME || '',
     backendUrl: process.env.JS_PMACHINE_BACKEND_URL || '',
+    aggregatorUrl: process.env.JS_PMACHINE_AGGREGATOR_URL || '',
     advertiseHost: process.env.JS_PMACHINE_ADVERTISE_HOST || '127.0.0.1',
     udpAnnounceHost: process.env.JS_PMACHINE_UDP_ANNOUNCE_HOST || '',
     udpAnnouncePort: Number(process.env.JS_PMACHINE_UDP_ANNOUNCE_PORT ?? process.env.UDP_PORT ?? 4210),
@@ -49,6 +50,7 @@ function parseCliArgs(argv) {
     else if (token === '--host') args.host = String(argv[++index]);
     else if (token === '--name') args.name = String(argv[++index]);
     else if (token === '--backend') args.backendUrl = String(argv[++index]);
+    else if (token === '--aggregator-url') args.aggregatorUrl = String(argv[++index]);
     else if (token === '--advertise-host') args.advertiseHost = String(argv[++index]);
     else if (token === '--udp-announce-host') args.udpAnnounceHost = String(argv[++index]);
     else if (token === '--udp-announce-port') args.udpAnnouncePort = Number(argv[++index]);
@@ -141,6 +143,7 @@ export function createJsPmachineNodeServer({
   name = 'js-pmachine',
   port = 4111,
   backendUrl = '',
+  aggregatorUrl = '',
   advertiseHost = '127.0.0.1',
   announceIntervalMs = 60_000,
   udpAnnounceHost = '',
@@ -200,14 +203,16 @@ export function createJsPmachineNodeServer({
       const base = status.httpPort ? `http://127.0.0.1:${status.httpPort}` : origin;
       services.push({
         ...registration,
-        provider: 'pascalish',
+        provider: status.serviceCapabilities.sourceLanguage,
         endpoint: `${base}/`,
         capabilities: status.serviceCapabilities
       });
       for (const daemon of registration.daemons) {
         services.push({
           serviceId: daemon, instanceId: `${registration.instanceId}:${daemon}`,
-          kind: 'daemon', provider: 'pascalish', enabled: registration.enabled,
+          kind: 'daemon',
+          provider: status.daemonDiagnostics.find(unit => unit.id === daemon)?.sourceLanguage || 'unknown',
+          enabled: registration.enabled,
           endpoint: `${origin}/pmachine/service_host/status?collectorId=${encodeURIComponent(registration.instanceId)}`
         });
       }
@@ -296,6 +301,7 @@ export function createJsPmachineNodeServer({
         const pcodeText = readFfsFile(entry.file);
         const programMap = parseHostedMap(pcodeText, readFfsFile(entry.map), 'daemon');
         daemons.push({ compiled: { pcodeText, programMap }, udpPort: entry.udpPort ?? null, udpShared: entry.udpShared ?? false,
+          udpQueueLimit: entry.udpQueueLimit ?? 1,
           udpBindAddress: entry.udpBindAddress ?? (additional ? '127.0.0.1' : '0.0.0.0'),
           multicastGroup: entry.multicastGroup ?? '', multicastInterface: entry.multicastInterface ?? '' });
       }
@@ -326,6 +332,7 @@ export function createJsPmachineNodeServer({
     }
 
     let lifecycle;
+    let cacheSourceAggregatorUrl = aggregatorUrl || backendUrl;
     if (params.has('serviceLifecycle') || params.has('ownerAggregatorId') || params.has('reportTarget')) {
       const configured = params.has('serviceLifecycle') ? JSON.parse(params.get('serviceLifecycle')) : {};
       const reporting = params.has('reportTarget') ? JSON.parse(params.get('reportTarget')) : null;
@@ -335,6 +342,7 @@ export function createJsPmachineNodeServer({
         || !params.get('ownerAggregatorId') || typeof reporting?.endpoint !== 'string') {
         throw Object.assign(new Error('Hosted lifecycle requires explicit owner, report target and valid requirements'), { status: 400 });
       }
+      cacheSourceAggregatorUrl = reporting?.endpoint || cacheSourceAggregatorUrl;
       const requirements = serviceMap.serviceLifecycle?.requires || [];
       lifecycle = {
         metadata: { ...configured, version: configured.version ?? 1,
@@ -357,6 +365,12 @@ export function createJsPmachineNodeServer({
       host: additional ? '127.0.0.1' : '0.0.0.0',
       httpPort,
       lifecycle,
+      cacheSourceResolver: cacheSourceAggregatorUrl
+        ? createAggregatorCacheSourceResolver({
+          aggregatorUrl: cacheSourceAggregatorUrl,
+          fetchImpl,
+        })
+        : null,
       sharedHttpListener: () => server.address(),
       udpPort: additional || sharedDaemons && !udpPort ? null : udpPort,
       networkPeers: params.has('networkPeers') ? JSON.parse(params.get('networkPeers')) : [],

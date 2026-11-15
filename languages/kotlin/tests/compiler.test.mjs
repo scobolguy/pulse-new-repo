@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { compileKotlinToPcode } from '../src/compile-kotlin-to-pcode.mjs';
+import { applyCacheSchemas } from '../src/cache-schema.mjs';
 import { executeProgram, loadOpcodeMap, parsePcode } from '../../../virtualMachines/esp32/pmachines/javascript/index.mjs';
 import { kotlinCoreSpecCases } from './spec-cases.mjs';
 
@@ -45,6 +46,119 @@ fun main() {
   println(choose(false))
 }`);
   assert.deepEqual(result.stdout, ['10', '20']);
+});
+
+test('Kotlin cache annotations emit typed uniqueness and latest metadata', () => {
+  const source = `@Cache(name = "devices", capacity = 50, ttlMs = 180000,
+  fields = "id:string,observedAt:string", uniqueBy = "id", latestBy = "observedAt")
+class DeviceCache {}
+fun main() {}`;
+  const artifact = compileKotlinToPcode(source);
+  assert.deepEqual(artifact.programMap.hostCaches, [{
+    name: 'devices', capacity: 50, ttlMs: 180000, storage: 'RAM', mode: 'PERSISTENT',
+    fields: [{ name: 'id', type: 'string' }, { name: 'observedAt', type: 'string' }],
+    uniqueBy: 'id', latestBy: 'observedAt'
+  }]);
+  assert.throws(() => compileKotlinToPcode(source.replace('latestBy = "observedAt"', 'latestBy = "missing"')),
+    /latestBy field 'missing' is not declared/);
+});
+
+test('Kotlin cache SQL compiles a read-only physical view without reflection', () => {
+  const artifact = compileKotlinToPcode(`@Cache(
+  name = "devices", capacity = 50, ttlMs = 180000,
+  fields = "id:string,protocol:string",
+  query = "SELECT id, protocol FROM devices WHERE protocol = 'kasa' ORDER BY id LIMIT 10"
+)
+class DeviceCache {}
+fun main() {}`);
+  const [cache] = artifact.programMap.hostCaches;
+  assert.deepEqual(cache.viewFields, [
+    { name: 'id', type: 'string' }, { name: 'protocol', type: 'string' }
+  ]);
+  assert.deepEqual(cache.queryPlan, {
+    kind: 'select',
+    branches: [{
+      projections: [
+        { kind: 'column', column: 'id' }, { kind: 'column', column: 'protocol' }
+      ],
+      tables: [{ name: 'devices', alias: 'devices' }],
+      joins: [],
+      where: [{
+        left: { column: 'protocol' }, operator: '=',
+        right: { kind: 'literal', value: 'kasa', type: 'string' }
+      }],
+      outputFields: [
+        { name: 'id', type: 'string' }, { name: 'protocol', type: 'string' }
+      ]
+    }],
+    orderBy: [{ column: 'id', direction: 'asc' }],
+    limit: 10
+  });
+});
+
+test('Kotlin virtual-cache SQL binds aliases to logical cache services', () => {
+  const artifact = compileKotlinToPcode(`@VirtualCache(
+  name = "all-devices",
+  sources = "kasa=kasa-device-service/devices,tapo=tapo-camera-service/cameras",
+  fields = "source:string,sourceKey:string,details:string",
+  query = "SELECT 'kasa' AS source, cache_key AS sourceKey, device_json AS details FROM kasa UNION ALL SELECT 'tapo' AS source, cache_key AS sourceKey, device_json AS details FROM tapo"
+)
+class AllDevices {}
+fun main() {}`);
+  const [cache] = artifact.programMap.hostCaches;
+  assert.deepEqual(cache.sourceDefinitions, [
+    { alias: 'kasa', serviceId: 'kasa-device-service', cacheName: 'devices' },
+    { alias: 'tapo', serviceId: 'tapo-camera-service', cacheName: 'cameras' }
+  ]);
+  assert.deepEqual(cache.fields, [
+    { name: 'source', type: 'string' }, { name: 'sourceKey', type: 'string' },
+    { name: 'details', type: 'string' }
+  ]);
+  assert.equal(cache.queryPlan.branches.length, 2);
+});
+
+test('Kotlin virtual caches retain local source declarations', () => {
+  const artifact = compileKotlinToPcode(`@VirtualCache(name = "all-devices", sources = "kasa-devices,tapo-cameras")
+class AllDevices {}
+fun main() {}`);
+  const [cache] = artifact.programMap.hostCaches;
+  assert.deepEqual(cache.sources, ['kasa-devices', 'tapo-cameras']);
+  assert.deepEqual(cache.sourceDefinitions, [
+    { alias: 'kasa-devices', local: true, cacheName: 'kasa-devices' },
+    { alias: 'tapo-cameras', local: true, cacheName: 'tapo-cameras' }
+  ]);
+});
+
+test('Kotlin cache SQL rejects writes, undeclared sources, and result schema mismatches', () => {
+  const base = `@VirtualCache(name = "view", sources = "kasa=kasa-service/devices",
+  fields = "sourceKey:integer", query = "%QUERY%")
+class View {}
+fun main() {}`;
+  assert.throws(() => compileKotlinToPcode(base.replace('%QUERY%', 'DELETE FROM kasa')), /Expected SQL SELECT/);
+  assert.throws(() => compileKotlinToPcode(base.replace('%QUERY%', 'SELECT cache_key AS sourceKey FROM missing')),
+    /not declared/);
+  assert.throws(() => compileKotlinToPcode(base.replace('%QUERY%', 'SELECT device_json AS sourceKey FROM kasa')),
+    /projection does not match/);
+  assert.throws(() => compileKotlinToPcode(base.replace('%QUERY%', 'SELECT cache_key AS sourceKey FROM kasa; SELECT cache_key FROM kasa')),
+    /single SQL statement/);
+});
+
+test('Kotlin deployment schemas retain source-declared cache constraints', () => {
+  const unit = { programMap: { hostCaches: [{
+    name: 'devices', capacity: 50, ttlMs: 180000, fields: [], uniqueBy: 'id', latestBy: 'observedAt'
+  }] } };
+  applyCacheSchemas(unit, [{
+    name: 'devices', capacity: 50,
+    fields: [{ name: 'id', type: 'string' }, { name: 'observedAt', type: 'string' }]
+  }]);
+  assert.deepEqual(unit.programMap.hostCaches[0], {
+    name: 'devices', capacity: 50, ttlMs: 180000,
+    fields: [{ name: 'id', type: 'string' }, { name: 'observedAt', type: 'string' }],
+    uniqueBy: 'id', latestBy: 'observedAt'
+  });
+  assert.throws(() => applyCacheSchemas({ programMap: { hostCaches: unit.programMap.hostCaches } }, [{
+    name: 'devices', capacity: 50, fields: [{ name: 'wrong', type: 'string' }]
+  }]), /does not match its declaration/);
 });
 
 test('allows a fresh val within each loop iteration', async () => {

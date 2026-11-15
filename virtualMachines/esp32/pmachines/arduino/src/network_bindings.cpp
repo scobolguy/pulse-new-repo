@@ -1,5 +1,6 @@
 #include "network_bindings.h"
 #include "async_diagnostics.h"
+#include "bluetooth_discovery.h"
 #if defined(ESP32)
 #include <WiFi.h>
 #include <WiFiClient.h>
@@ -106,7 +107,7 @@ bool NetworkBindings::configure(JsonVariantConst peers, Session& session, std::s
 }
 
 bool NetworkBindings::invoke(const std::string& op, const std::vector<HostValue>& args,
-                             HostValue& result, std::string& error) {
+                             HostValue& result, std::string& error, WiFiUDP* ownedUdp) {
     if (!current) { error = "Network session unavailable"; return false; }
     auto& last = current->last;
     auto& exchanges = current->exchanges;
@@ -114,6 +115,33 @@ bool NetworkBindings::invoke(const std::string& op, const std::vector<HostValue>
     const auto& allowed = current->allowed;
     auto fail = [&](const char* message) { error = message; return false; };
     auto byte = [](int value) { return value >= 0 && value <= 255; };
+    if (op == "bluetooth_scan")
+        return scanBluetoothDevices(args[0].integer, result.text, error);
+    if (op == "network_peer_allowed") {
+        result.integer = 0;
+        for (const auto& peer : allowed)
+            if (peer.first == args[0].text && peer.second == args[1].integer) result.integer = 1;
+        return true;
+    }
+    if (op == "udp_send") {
+        const auto& ip = args[0].text;
+        const int port = args[1].integer;
+        if (!ownedUdp) return fail("UDP send requires an owned daemon socket");
+        bool permitted = false;
+        for (const auto& peer : allowed)
+            if (peer.first == ip && peer.second == port) permitted = true;
+        if (!permitted) return fail("Network peer is not allowed");
+        IPAddress address;
+        std::string data;
+        if (port < 1 || port > 65535 || !address.fromString(ip.c_str())
+            || !decode(args[2].text, data) || data.empty() || data.size() > 1024)
+            return fail("Invalid or oversized UDP request");
+        if (!ownedUdp->beginPacket(address, static_cast<uint16_t>(port))
+            || ownedUdp->write(reinterpret_cast<const uint8_t*>(data.data()), data.size()) != data.size()
+            || !ownedUdp->endPacket()) return fail("UDP send failed");
+        result.integer = 0;
+        return true;
+    }
     if (op == "network_discovery_step") {
         JsonDocument document;
         JsonArray devices = document["devices"].to<JsonArray>();
@@ -236,71 +264,87 @@ bool NetworkBindings::invoke(const std::string& op, const std::vector<HostValue>
         udp.write(reinterpret_cast<const uint8_t*>(probe), sizeof(probe) - 1);
         udp.endPacket();
         const uint32_t deadline = millis() + 2000;
-        uint8_t buffer[256];
+        uint8_t buffer[1400];
         while (millis() < deadline) {
             const int size = udp.parsePacket();
             if (size <= 0) {
                 delay(1);
                 continue;
             }
-            udp.read(buffer, std::min(size, static_cast<int>(sizeof(buffer) - 1)));
+            const int readSize = udp.read(buffer, std::min(size, static_cast<int>(sizeof(buffer) - 1)));
+            while (udp.available()) udp.read();
+            if (readSize <= 0) continue;
+            buffer[readSize] = '\0';
+            const String response(reinterpret_cast<const char*>(buffer));
+            const int matchStart = response.indexOf("ProbeMatch");
+            const int xaddrsStart = matchStart < 0 ? -1 : response.indexOf("XAddrs", matchStart);
+            if (xaddrsStart < 0 || response.indexOf("NetworkVideoTransmitter") < 0) continue;
+            const int valueStart = response.indexOf('>', xaddrsStart);
+            const int valueEnd = valueStart < 0 ? -1 : response.indexOf('<', valueStart + 1);
+            if (valueEnd <= valueStart) continue;
+            String serviceUrl = response.substring(valueStart + 1, valueEnd);
+            serviceUrl.trim();
+            const int separator = serviceUrl.indexOf(' ');
+            if (separator >= 0) serviceUrl = serviceUrl.substring(0, separator);
+            const bool https = serviceUrl.startsWith("https://");
+            const int schemeLength = https ? 8 : (serviceUrl.startsWith("http://") ? 7 : 0);
+            if (schemeLength == 0) continue;
+            const int authorityStart = schemeLength;
+            int authorityEnd = serviceUrl.indexOf('/', authorityStart);
+            if (authorityEnd < 0) authorityEnd = serviceUrl.length();
+            const String authority = serviceUrl.substring(authorityStart, authorityEnd);
+            if (authority.length() == 0 || authority.indexOf('@') >= 0) continue;
+            const int colon = authority.lastIndexOf(':');
+            if (colon == 0) continue;
+            int port = https ? 443 : 80;
+            if (colon >= 0) {
+                const String portText = authority.substring(colon + 1);
+                if (portText.length() == 0 || portText.length() > 5) continue;
+                bool numericPort = true;
+                for (size_t index = 0; index < portText.length(); ++index) {
+                    if (portText[index] < '0' || portText[index] > '9') {
+                        numericPort = false;
+                        break;
+                    }
+                }
+                if (!numericPort) continue;
+                port = portText.toInt();
+                if (port < 1 || port > 65535) continue;
+            }
             JsonObject device = devices.add<JsonObject>();
             device["kind"] = "camera";
             device["protocol"] = "onvif";
             device["address"] = udp.remoteIP().toString();
-            device["port"] = udp.remotePort();
+            device["port"] = port;
+            device["serviceUrl"] = serviceUrl;
         }
         udp.stop();
+        serializeJson(devices, result.text);
+        return true;
+    }
+    if (op == "local_ipv4_batch") {
+        JsonDocument document;
+        JsonArray hosts = document.to<JsonArray>();
+        IPAddress address, mask;
+        if (!connected(address, mask)) {
+            serializeJson(hosts, result.text);
+            return true;
+        }
+        const int offset = args[0].integer;
+        const int count = args[1].integer;
+        if (offset < 0 || count < 0 || count > 10) return fail("Invalid IPv4 batch");
         uint32_t first = static_cast<uint32_t>(networkAddress(address, mask));
         uint32_t last = first | ~static_cast<uint32_t>(mask);
-        if (last - first > 1024) {
+        if (last - first > 256) {
             first = static_cast<uint32_t>(address) & 0xffffff00U;
             last = first | 0xffU;
         }
-        for (uint32_t value = first + 1; value < last; value += 10) {
-            const uint32_t batchEnd = std::min(value + 10, last);
-            for (const uint16_t port : { static_cast<uint16_t>(554), static_cast<uint16_t>(2020) }) {
-                WiFiClient clients[10];
-                IPAddress peers[10];
-                bool connected[10] = {};
-                const size_t count = batchEnd - value;
-                for (size_t index = 0; index < count; ++index) {
-                    peers[index] = IPAddress(value + index);
-                    clients[index].setTimeout(250);
-                    connected[index] = clients[index].connect(peers[index], port, 50);
-                    if (connected[index]) {
-                        clients[index].printf(
-                            "OPTIONS rtsp://%s:%u/ RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: PulseDiscovery\r\n\r\n",
-                            peers[index].toString().c_str(), port);
-                    }
-                }
-                const uint32_t responseDeadline = millis() + 250;
-                String responses[10];
-                while (millis() < responseDeadline) {
-                    bool pending = false;
-                    for (size_t index = 0; index < count; ++index) {
-                        if (!connected[index]) continue;
-                        pending = true;
-                        while (clients[index].available() && responses[index].length() < 128)
-                            responses[index] += static_cast<char>(clients[index].read());
-                        if (responses[index].length() >= 9) clients[index].stop();
-                    }
-                    if (!pending) break;
-                    delay(1);
-                }
-                for (size_t index = 0; index < count; ++index) {
-                    clients[index].stop();
-                    if (responses[index].startsWith("RTSP/1.0") || responses[index].startsWith("RTSP/1.1")) {
-                        JsonObject device = devices.add<JsonObject>();
-                        device["kind"] = "camera";
-                        device["protocol"] = "rtsp";
-                        device["address"] = peers[index].toString();
-                        device["port"] = port;
-                    }
-                }
-            }
+        for (int index = 0; index < count; ++index) {
+            const uint32_t value = first + 1 + static_cast<uint32_t>(offset + index);
+            if (value >= last) break;
+            hosts.add(IPAddress(value).toString());
         }
-        serializeJson(devices, result.text);
+        serializeJson(hosts, result.text);
         return true;
     }
     if (op == "local_ipv4_subnets") {

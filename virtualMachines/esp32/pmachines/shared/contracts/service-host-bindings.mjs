@@ -52,6 +52,7 @@ export const SERVICE_HOST_BINDINGS = Object.freeze({
   },
   'host.bluetooth_read': { arity: 1, args: ['integer'], result: 'string', capability: 'bluetooth.discovery', desktopOnly: true },
   'host.bluetooth_status': { arity: 0, args: [], result: 'string', capability: 'bluetooth.discovery', desktopOnly: true },
+  'host.bluetooth_scan': { arity: 1, args: ['integer'], result: 'string', capability: 'bluetooth.discovery' },
   ...Object.fromEntries([
     ['get', ['string', 'string'], 'string'],
     ['put', ['string', 'string', 'string'], 'integer'],
@@ -225,7 +226,10 @@ export const SERVICE_HOST_BINDINGS = Object.freeze({
   'host.tcp_exchange': { arity: 6, args: ['string', 'integer', 'string', 'integer', 'integer', 'integer'], result: 'string' },
   'host.tcp_exchange_buffer': { arity: 6, args: ['string', 'integer', 'string', 'integer', 'integer', 'integer'], result: 'integer' },
   'host.udp_exchange': { arity: 5, args: ['string', 'integer', 'string', 'integer', 'integer'], result: 'string' },
+  'host.udp_send': { arity: 3, args: ['string', 'integer', 'string'], result: 'integer' },
+  'host.network_peer_allowed': { arity: 2, args: ['string', 'integer'], result: 'integer' },
   'host.local_ipv4_subnets': { arity: 0, args: [], result: 'string' },
+  'host.local_ipv4_batch': { arity: 2, args: ['integer', 'integer'], result: 'string' },
   'host.kasa_discover': { arity: 0, args: [], result: 'string' },
   'host.camera_discover': { arity: 0, args: [], result: 'string' },
   'host.network_discovery_step': { arity: 0, args: [], result: 'string' },

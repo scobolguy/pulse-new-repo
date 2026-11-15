@@ -1,6 +1,5 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
-import net from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { compilePascalishProgramWithAntlr } from '../../aggregator/scripts/compile-pascalish-program-antlr-to-pcode.mjs';
 import { createPascalishServiceHost } from './src/service-host.mjs';
@@ -13,17 +12,16 @@ export async function loadFederationConfig(path = new URL('../../config/federate
   const origin = new URL(config.esp32Origin);
   const interfaces = Object.values(os.networkInterfaces()).flat().filter(item => item.family === 'IPv4' && !item.internal);
   const candidates = interfaces.filter(item => item.address.split('.').slice(0, 3).join('.') === origin.hostname.split('.').slice(0, 3).join('.'));
-  const selected = config.lanInterface ? interfaces.find(item => item.address === config.lanInterface) : candidates.length === 1 ? candidates[0] : null;
-  if (!selected) throw new Error('Configure lanInterface: no unique active IPv4 interface on the ESP32 subnet');
+  const requestedInterface = process.env.PULSE_LAN_INTERFACE || config.lanInterface;
+  const selected = requestedInterface ? interfaces.find(item => item.address === requestedInterface) : candidates.length === 1 ? candidates[0] : null;
+  if (!selected) throw new Error('Configure an active lanInterface or PULSE_LAN_INTERFACE: no unique active IPv4 interface on the configured subnet');
   if (config.httpHost !== '127.0.0.1') throw new Error('Collector HTTP and aggregation are restricted to loopback on this trusted PC');
   for (const name of ['tuyaHttpPort', 'ssdpHttpPort', 'aggregationHttpPort', 'tuyaUdpPort', 'ssdpUdpPort']) {
     if (!Number.isInteger(config[name]) || config[name] < 1 || config[name] > 65535) throw new Error(`Invalid ${name}`);
   }
   if (new Set([config.tuyaHttpPort, config.ssdpHttpPort, config.aggregationHttpPort]).size !== 3 ||
       config.tuyaUdpPort === config.ssdpUdpPort || config.observationTtlMs !== 180000 ||
-      !Number.isInteger(config.refreshMs) || config.refreshMs < 10000 || config.refreshMs > 60000 ||
-      !Array.isArray(config.kasaPeers) || config.kasaPeers.length < 1 || config.kasaPeers.length > 8 ||
-      new Set(config.kasaPeers).size !== config.kasaPeers.length || config.kasaPeers.some(ip => net.isIP(ip) !== 4)) {
+      !Number.isInteger(config.refreshMs) || config.refreshMs < 10000 || config.refreshMs > 60000) {
     throw new Error('Invalid bounded federation configuration');
   }
   if (config.ssdpDescriptionPorts !== undefined && (!Array.isArray(config.ssdpDescriptionPorts) ||

@@ -7,6 +7,7 @@
 #include <cerrno>
 #include <cctype>
 #include <cmath>
+#include <cstring>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -26,12 +27,20 @@
 #include <vector>
 
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <fcntl.h>
 #include <io.h>
 #include <sys/stat.h>
 #include <windows.h>
 #else
 #include <fcntl.h>
+#include <netdb.h>
+#include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -316,8 +325,9 @@ Program parseProgram(const std::string& text) {
         instruction.sourceText = line;
         static const std::vector<std::string> supported = {
             "ADD", "AND", "CALL", "CALL_EXT", "CONCAT", "EQ", "GE", "GT", "HALT",
-            "JMP", "JZ", "LE", "LOAD", "LT", "MAP_RETURN", "MUL", "NEQ", "NOP", "NOT",
-            "OR", "PUSH_INT", "PUSH_STR", "RET", "STORE", "STREQ", "STRNEQ", "SUB"
+            "JMP", "JZ", "LE", "LOAD", "LOAD_NAME", "LT", "MAP_RETURN", "MUL", "NEQ",
+            "NOP", "NOT", "OR", "PUSH_INT", "PUSH_STR", "RET", "STORE", "STORE_NAME",
+            "STREQ", "STRNEQ", "SUB"
         };
         if (std::find(supported.begin(), supported.end(), instruction.op) == supported.end()) {
             throw std::runtime_error("Native service host does not support opcode " + instruction.op);
@@ -1171,7 +1181,7 @@ HttpResponse execute(const Program& program, const HttpRequest& request, uint64_
             ++pc;
             continue;
         }
-        if (instruction.op == "LOAD") {
+        if (instruction.op == "LOAD" || instruction.op == "LOAD_NAME") {
             const PValue* value = nullptr;
             for (auto frame = variables.rbegin(); frame != variables.rend(); ++frame) {
                 const auto found = frame->find(instruction.operand);
@@ -1685,7 +1695,7 @@ HttpResponse execute(const Program& program, const HttpRequest& request, uint64_
             ++pc;
             continue;
         }
-        if (instruction.op == "STORE") {
+        if (instruction.op == "STORE" || instruction.op == "STORE_NAME") {
             variables.back()[instruction.operand] = pop();
             ++pc;
             continue;
@@ -1762,15 +1772,745 @@ void validateMap(const JsonValue& map, std::string& serviceId, const Program& pr
     }
 }
 
+std::string stringProperty(const JsonValue::Object& object, const std::string& key,
+    const std::string& fallback = {}) {
+    const auto* value = optionalProperty(object, key);
+    return value ? asString(*value, key.c_str()) : fallback;
+}
+
+int64_t safeInteger(const JsonValue& value, const char* label) {
+    const auto* number = std::get_if<double>(&value.value);
+    if (!number || std::floor(*number) != *number
+        || *number < -9007199254740991.0 || *number > 9007199254740991.0) {
+        throw std::runtime_error(std::string("Expected safe integer: ") + label);
+    }
+    return static_cast<int64_t>(*number);
+}
+
+const JsonValue::Array& arrayProperty(const JsonValue::Object& object, const char* key) {
+    return requireArray(property(object, key));
+}
+
+std::string lowerAscii(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+    });
+    return value;
+}
+
+struct HttpUrl {
+    std::string host;
+    std::string port;
+    std::string authority;
+    std::string target;
+};
+
+HttpUrl parseHttpUrl(const std::string& value) {
+    if (value.rfind("http://", 0) != 0 || value.find('#') != std::string::npos) {
+        throw std::runtime_error("Native cache resolver requires an absolute HTTP URL");
+    }
+    const size_t authorityStart = 7;
+    const size_t authorityEnd = value.find_first_of("/?", authorityStart);
+    const std::string authority = value.substr(authorityStart,
+        authorityEnd == std::string::npos ? std::string::npos : authorityEnd - authorityStart);
+    if (authority.empty() || authority.find('@') != std::string::npos) {
+        throw std::runtime_error("Invalid native cache HTTP URL authority");
+    }
+    std::string host;
+    std::string port = "80";
+    if (authority.front() == '[') {
+        const auto closing = authority.find(']');
+        if (closing == std::string::npos) throw std::runtime_error("Invalid IPv6 cache URL");
+        host = authority.substr(1, closing - 1);
+        if (closing + 1 < authority.size()) {
+            if (authority[closing + 1] != ':') throw std::runtime_error("Invalid cache URL port");
+            port = authority.substr(closing + 2);
+        }
+    } else {
+        const auto colon = authority.rfind(':');
+        if (colon != std::string::npos && authority.find(':') == colon) {
+            host = authority.substr(0, colon);
+            port = authority.substr(colon + 1);
+        } else host = authority;
+    }
+    if (host.empty() || port.empty() || !std::all_of(port.begin(), port.end(), [](unsigned char c) {
+        return c >= '0' && c <= '9';
+    })) throw std::runtime_error("Invalid cache URL host or port");
+    const unsigned long portNumber = std::stoul(port);
+    if (portNumber == 0 || portNumber > 65535) throw std::runtime_error("Invalid cache URL port");
+    std::string target = "/";
+    if (authorityEnd != std::string::npos) {
+        target = value[authorityEnd] == '?' ? "/" + value.substr(authorityEnd) : value.substr(authorityEnd);
+    }
+    if (target.empty() || target.front() != '/' || target.find('\r') != std::string::npos
+        || target.find('\n') != std::string::npos) throw std::runtime_error("Invalid cache URL path");
+    return {host, port, authority, target};
+}
+
+#ifdef _WIN32
+using CacheSocket = SOCKET;
+static constexpr CacheSocket INVALID_CACHE_SOCKET = INVALID_SOCKET;
+#else
+using CacheSocket = int;
+static constexpr CacheSocket INVALID_CACHE_SOCKET = -1;
+#endif
+
+void closeCacheSocket(CacheSocket socket) {
+    if (socket == INVALID_CACHE_SOCKET) return;
+#ifdef _WIN32
+    closesocket(socket);
+#else
+    close(socket);
+#endif
+}
+
+bool sendCacheRequest(CacheSocket socket, const std::string& request) {
+    size_t sent = 0;
+    while (sent < request.size()) {
+#ifdef _WIN32
+        const int result = send(socket, request.data() + sent,
+            static_cast<int>(std::min<size_t>(request.size() - sent, std::numeric_limits<int>::max())), 0);
+#else
+        const auto result = send(socket, request.data() + sent, request.size() - sent, 0);
+#endif
+        if (result <= 0) return false;
+        sent += static_cast<size_t>(result);
+    }
+    return true;
+}
+
+struct HttpGetResult {
+    int status;
+    std::string body;
+};
+
+HttpGetResult httpGet(const std::string& url, size_t maxBodyBytes = 65536) {
+    const auto parsedUrl = parseHttpUrl(url);
+    addrinfo hints{};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    addrinfo* addresses = nullptr;
+    const int lookup = getaddrinfo(parsedUrl.host.c_str(), parsedUrl.port.c_str(), &hints, &addresses);
+    if (lookup != 0) throw std::runtime_error("Unable to resolve cache URL host");
+    CacheSocket socket = INVALID_CACHE_SOCKET;
+    for (auto* address = addresses; address; address = address->ai_next) {
+        socket = ::socket(address->ai_family, address->ai_socktype, address->ai_protocol);
+        if (socket == INVALID_CACHE_SOCKET) continue;
+#ifdef _WIN32
+        const DWORD timeoutMs = 3000;
+        setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
+        setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
+#else
+        timeval timeout{};
+        timeout.tv_sec = 3;
+        setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+        setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+#endif
+        if (connect(socket, address->ai_addr, static_cast<int>(address->ai_addrlen)) == 0) break;
+        closeCacheSocket(socket);
+        socket = INVALID_CACHE_SOCKET;
+    }
+    freeaddrinfo(addresses);
+    if (socket == INVALID_CACHE_SOCKET) throw std::runtime_error("Unable to connect to cache URL");
+    const std::string request = "GET " + parsedUrl.target + " HTTP/1.1\r\nHost: " +
+        parsedUrl.authority + "\r\nAccept: application/json\r\nConnection: close\r\n\r\n";
+    if (!sendCacheRequest(socket, request)) {
+        closeCacheSocket(socket);
+        throw std::runtime_error("Unable to send cache HTTP request");
+    }
+    std::string response;
+    char buffer[4096];
+    for (;;) {
+#ifdef _WIN32
+        const int received = recv(socket, buffer, static_cast<int>(sizeof(buffer)), 0);
+#else
+        const auto received = recv(socket, buffer, sizeof(buffer), 0);
+#endif
+        if (received == 0) break;
+        if (received < 0) {
+            closeCacheSocket(socket);
+            throw std::runtime_error("Cache HTTP request timed out or failed");
+        }
+        response.append(buffer, static_cast<size_t>(received));
+        if (response.size() > maxBodyBytes + 32768) {
+            closeCacheSocket(socket);
+            throw std::runtime_error("Cache HTTP response exceeds its size limit");
+        }
+    }
+    closeCacheSocket(socket);
+    const size_t headerEnd = response.find("\r\n\r\n");
+    if (headerEnd == std::string::npos) throw std::runtime_error("Invalid cache HTTP response");
+    const size_t statusEnd = response.find("\r\n");
+    std::istringstream statusLine(response.substr(0, statusEnd));
+    std::string protocol;
+    int status = 0;
+    if (!(statusLine >> protocol >> status) || protocol.rfind("HTTP/1.", 0) != 0) {
+        throw std::runtime_error("Invalid cache HTTP status line");
+    }
+    bool hasLength = false;
+    size_t contentLength = 0;
+    size_t lineStart = statusEnd == std::string::npos ? headerEnd : statusEnd + 2;
+    while (lineStart < headerEnd) {
+        const size_t lineEnd = response.find("\r\n", lineStart);
+        const std::string line = response.substr(lineStart, lineEnd - lineStart);
+        const size_t colon = line.find(':');
+        if (colon == std::string::npos) throw std::runtime_error("Invalid cache HTTP header");
+        const std::string name = lowerAscii(line.substr(0, colon));
+        std::string value = line.substr(colon + 1);
+        const size_t first = value.find_first_not_of(" \t");
+        value = first == std::string::npos ? "" : value.substr(first);
+        if (name == "content-length") {
+            size_t consumed = 0;
+            contentLength = static_cast<size_t>(std::stoull(value, &consumed));
+            if (consumed != value.size() || contentLength > maxBodyBytes)
+                throw std::runtime_error("Cache HTTP body exceeds its size limit");
+            hasLength = true;
+        } else if (name == "transfer-encoding" && lowerAscii(value) != "identity") {
+            throw std::runtime_error("Chunked cache HTTP responses are unsupported");
+        }
+        if (lineEnd == std::string::npos || lineEnd >= headerEnd) break;
+        lineStart = lineEnd + 2;
+    }
+    const size_t bodyStart = headerEnd + 4;
+    std::string body = response.substr(bodyStart);
+    if ((hasLength && body.size() != contentLength) || body.size() > maxBodyBytes) {
+        throw std::runtime_error("Incomplete or oversized cache HTTP body");
+    }
+    return {status, std::move(body)};
+}
+
+std::string urlEncode(const std::string& value) {
+    static constexpr char hex[] = "0123456789ABCDEF";
+    std::string result;
+    for (const unsigned char character : value) {
+        if ((character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z')
+            || (character >= '0' && character <= '9') || character == '-' || character == '_'
+            || character == '.' || character == '~') result.push_back(static_cast<char>(character));
+        else {
+            result.push_back('%');
+            result.push_back(hex[character >> 4]);
+            result.push_back(hex[character & 15]);
+        }
+    }
+    return result;
+}
+
+std::map<std::string, std::string> parseQuery(const std::string& value) {
+    std::map<std::string, std::string> result;
+    size_t start = 0;
+    while (start < value.size()) {
+        const size_t end = value.find('&', start);
+        const std::string item = value.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        const size_t equals = item.find('=');
+        const std::string key = item.substr(0, equals);
+        const std::string content = equals == std::string::npos ? "" : item.substr(equals + 1);
+        auto decode = [](const std::string& encoded) {
+            std::string decoded;
+            for (size_t index = 0; index < encoded.size(); ++index) {
+                if (encoded[index] == '+') decoded.push_back(' ');
+                else if (encoded[index] == '%') {
+                    if (index + 2 >= encoded.size()) throw std::runtime_error("Invalid query escape");
+                    auto digit = [](char c) -> int {
+                        if (c >= '0' && c <= '9') return c - '0';
+                        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                        return -1;
+                    };
+                    const int high = digit(encoded[index + 1]), low = digit(encoded[index + 2]);
+                    if (high < 0 || low < 0) throw std::runtime_error("Invalid query escape");
+                    decoded.push_back(static_cast<char>((high << 4) | low));
+                    index += 2;
+                } else decoded.push_back(encoded[index]);
+            }
+            return decoded;
+        };
+        const std::string decodedKey = decode(key);
+        if (decodedKey.empty() || !result.emplace(decodedKey, decode(content)).second)
+            throw std::runtime_error("Invalid or duplicate snapshot query parameter");
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return result;
+}
+
+struct CacheMetadata {
+    int64_t observationMs = 0;
+    int64_t observationSequence = 0;
+    int64_t remainingTtlMs = 0;
+};
+
+struct CacheRow {
+    JsonValue::Object values;
+    CacheMetadata metadata;
+};
+
+using CacheScope = std::map<std::string, CacheRow>;
+using CacheSourceRows = std::map<std::string, std::vector<CacheRow>>;
+
+struct CacheQueryResult {
+    JsonValue::Object row;
+    CacheMetadata metadata;
+};
+
+bool jsonEqual(const JsonValue& left, const JsonValue& right) {
+    if (left.value.index() != right.value.index()) return false;
+    if (const auto* a = std::get_if<double>(&left.value)) return *a == std::get<double>(right.value);
+    if (const auto* a = std::get_if<std::string>(&left.value)) return *a == std::get<std::string>(right.value);
+    if (const auto* a = std::get_if<bool>(&left.value)) return *a == std::get<bool>(right.value);
+    return serializeJson(left) == serializeJson(right);
+}
+
+int compareJson(const JsonValue& left, const JsonValue& right) {
+    if (left.value.index() != right.value.index()) throw std::runtime_error("SQL values have different types");
+    if (const auto* a = std::get_if<double>(&left.value)) {
+        const double b = std::get<double>(right.value);
+        return *a < b ? -1 : *a > b ? 1 : 0;
+    }
+    if (const auto* a = std::get_if<std::string>(&left.value)) {
+        const auto& b = std::get<std::string>(right.value);
+        return *a < b ? -1 : *a > b ? 1 : 0;
+    }
+    if (const auto* a = std::get_if<bool>(&left.value)) {
+        const bool b = std::get<bool>(right.value);
+        return *a == b ? 0 : *a ? 1 : -1;
+    }
+    throw std::runtime_error("Unsupported SQL comparison value");
+}
+
+const JsonValue& rowColumn(const CacheScope& scope, const JsonValue::Object& branch,
+    const JsonValue::Object& column) {
+    const std::string name = stringProperty(column, "column");
+    const std::string qualifier = lowerAscii(stringProperty(column, "qualifier"));
+    if (!qualifier.empty()) {
+        const auto source = scope.find(qualifier);
+        if (source == scope.end()) throw std::runtime_error("Unknown SQL table alias: " + qualifier);
+        for (const auto& [field, value] : source->second.values)
+            if (lowerAscii(field) == lowerAscii(name)) return value;
+        throw std::runtime_error("Unknown SQL column: " + name);
+    }
+    const auto& tables = arrayProperty(branch, "tables");
+    const JsonValue* match = nullptr;
+    for (const auto& tableValue : tables) {
+        const auto& table = asObject(tableValue, "SQL table");
+        const auto source = scope.find(lowerAscii(stringProperty(table, "alias")));
+        if (source == scope.end()) continue;
+        for (const auto& [field, value] : source->second.values) {
+            if (lowerAscii(field) != lowerAscii(name)) continue;
+            if (match) throw std::runtime_error("Ambiguous SQL column: " + name);
+            match = &value;
+        }
+    }
+    if (!match) throw std::runtime_error("Unknown SQL column: " + name);
+    return *match;
+}
+
+CacheMetadata mergeCacheMetadata(const CacheMetadata& left, const CacheMetadata& right) {
+    return {std::min(left.observationMs, right.observationMs),
+        std::max(left.observationSequence, right.observationSequence),
+        std::min(left.remainingTtlMs, right.remainingTtlMs)};
+}
+
+bool matchesCachePredicate(const JsonValue::Object& predicate, const CacheScope& scope,
+    const JsonValue::Object& branch) {
+    const auto& leftColumn = asObject(property(predicate, "left"), "SQL WHERE column");
+    const auto& literal = asObject(property(predicate, "right"), "SQL WHERE literal");
+    const int comparison = compareJson(rowColumn(scope, branch, leftColumn), property(literal, "value"));
+    const std::string operation = stringProperty(predicate, "operator");
+    if (operation == "=") return comparison == 0;
+    if (operation == "!=" || operation == "<>") return comparison != 0;
+    if (operation == "<") return comparison < 0;
+    if (operation == "<=") return comparison <= 0;
+    if (operation == ">") return comparison > 0;
+    if (operation == ">=") return comparison >= 0;
+    throw std::runtime_error("Unsupported SQL comparison operator");
+}
+
+JsonValue::Object projectCacheRow(const JsonValue::Object& branch, const CacheScope& scope) {
+    JsonValue::Object result;
+    const auto& projections = arrayProperty(branch, "projections");
+    const auto& tables = arrayProperty(branch, "tables");
+    for (const auto& projectionValue : projections) {
+        const auto& projection = asObject(projectionValue, "SQL projection");
+        const std::string kind = stringProperty(projection, "kind");
+        const bool star = kind == "star" || (optionalProperty(projection, "star")
+            && std::get_if<bool>(&optionalProperty(projection, "star")->value)
+            && std::get<bool>(optionalProperty(projection, "star")->value));
+        if (star) {
+            const std::string qualifier = lowerAscii(stringProperty(projection, "qualifier"));
+            const auto table = std::find_if(tables.begin(), tables.end(), [&](const JsonValue& value) {
+                return lowerAscii(stringProperty(asObject(value, "SQL table"), "alias")) == qualifier;
+            });
+            const std::string alias = qualifier.empty()
+                ? lowerAscii(stringProperty(asObject(tables.front(), "SQL table"), "alias"))
+                : lowerAscii(stringProperty(asObject(*table, "SQL table"), "alias"));
+            const auto source = scope.find(alias);
+            if (source == scope.end()) throw std::runtime_error("Unknown SQL star source");
+            result.insert(source->second.values.begin(), source->second.values.end());
+            continue;
+        }
+        const std::string outputName = stringProperty(projection, "alias",
+            stringProperty(projection, "column"));
+        if (kind == "literal") result[outputName] = property(projection, "value");
+        else result[outputName] = rowColumn(scope, branch, projection);
+    }
+    return result;
+}
+
+std::vector<CacheQueryResult> executeNativeCacheQuery(const JsonValue::Object& plan,
+    const CacheSourceRows& sources) {
+    if (stringProperty(plan, "kind") != "select") throw std::runtime_error("Invalid native cache query plan");
+    std::vector<CacheQueryResult> results;
+    size_t comparisons = 0;
+    for (const auto& branchValue : arrayProperty(plan, "branches")) {
+        const auto& branch = asObject(branchValue, "SQL branch");
+        const auto& tables = arrayProperty(branch, "tables");
+        if (tables.empty()) throw std::runtime_error("SQL branch has no source table");
+        const auto& firstTable = asObject(tables.front(), "SQL table");
+        const std::string firstName = stringProperty(firstTable, "name");
+        const auto firstRows = sources.find(firstName);
+        if (firstRows == sources.end()) throw std::runtime_error("SQL source is unavailable: " + firstName);
+        const std::string firstAlias = lowerAscii(stringProperty(firstTable, "alias"));
+        std::vector<std::pair<CacheScope, CacheMetadata>> rows;
+        for (const auto& row : firstRows->second) rows.push_back({{{firstAlias, row}}, row.metadata});
+        for (const auto& joinValue : arrayProperty(branch, "joins")) {
+            const auto& join = asObject(joinValue, "SQL join");
+            const auto& table = asObject(property(join, "table"), "SQL join table");
+            const std::string sourceName = stringProperty(table, "name");
+            const auto candidates = sources.find(sourceName);
+            if (candidates == sources.end()) throw std::runtime_error("SQL source is unavailable: " + sourceName);
+            std::vector<std::pair<CacheScope, CacheMetadata>> joined;
+            for (const auto& current : rows) for (const auto& candidate : candidates->second) {
+                if (++comparisons > 8192) throw std::runtime_error("Cache query join comparison limit exceeded");
+                CacheScope scope = current.first;
+                scope[lowerAscii(stringProperty(table, "alias"))] = candidate;
+                const auto& left = asObject(property(join, "left"), "SQL join column");
+                const auto& right = asObject(property(join, "right"), "SQL join column");
+                if (!jsonEqual(rowColumn(scope, branch, left), rowColumn(scope, branch, right))) continue;
+                joined.push_back({std::move(scope), mergeCacheMetadata(current.second, candidate.metadata)});
+                if (joined.size() > 800) throw std::runtime_error("Cache query result row limit exceeded");
+            }
+            rows = std::move(joined);
+        }
+        for (const auto& predicateValue : arrayProperty(branch, "where")) {
+            const auto& predicate = asObject(predicateValue, "SQL predicate");
+            rows.erase(std::remove_if(rows.begin(), rows.end(), [&](const auto& item) {
+                return !matchesCachePredicate(predicate, item.first, branch);
+            }), rows.end());
+        }
+        for (const auto& row : rows) {
+            results.push_back({projectCacheRow(branch, row.first), row.second});
+            if (results.size() > 800) throw std::runtime_error("Cache query result row limit exceeded");
+        }
+    }
+    const auto* orderValue = optionalProperty(plan, "orderBy");
+    if (orderValue) {
+        const auto& orderBy = requireArray(*orderValue);
+        std::stable_sort(results.begin(), results.end(), [&](const auto& left, const auto& right) {
+            for (const auto& item : orderBy) {
+                const auto& order = asObject(item, "SQL order");
+                const std::string field = stringProperty(order, "column");
+                const auto leftField = left.row.find(field), rightField = right.row.find(field);
+                if (leftField == left.row.end() || rightField == right.row.end())
+                    throw std::runtime_error("ORDER BY field is missing from query result");
+                const int comparison = compareJson(leftField->second, rightField->second);
+                if (comparison) return stringProperty(order, "direction") == "desc"
+                    ? comparison > 0 : comparison < 0;
+            }
+            return false;
+        });
+    }
+    const auto* limit = optionalProperty(plan, "limit");
+    if (limit && !std::holds_alternative<std::nullptr_t>(limit->value)) {
+        const int64_t count = safeInteger(*limit, "SQL limit");
+        if (count < 0) throw std::runtime_error("Invalid SQL LIMIT");
+        if (results.size() > static_cast<size_t>(count)) results.resize(static_cast<size_t>(count));
+    }
+    return results;
+}
+
+struct RemoteCacheSnapshot {
+    std::vector<CacheRow> rows;
+    std::string revision;
+    std::string instanceId;
+    std::string collectorId;
+    std::string bootId;
+    std::vector<JsonValue> errors;
+    bool complete = true;
+};
+
+JsonValue checkedHttpJson(const std::string& url, size_t maxBytes, const char* label) {
+    const auto response = httpGet(url, maxBytes);
+    if (response.status < 200 || response.status >= 300) {
+        throw std::runtime_error(std::string(label) + " returned HTTP " + std::to_string(response.status));
+    }
+    return parseJson(response.body);
+}
+
+RemoteCacheSnapshot fetchRemoteCacheSnapshot(const std::string& aggregatorUrl,
+    const std::string& serviceId, const std::string& cacheName) {
+    const auto aggregator = parseHttpUrl(aggregatorUrl);
+    const std::string resolvePath = "/api/cache-services/" + urlEncode(serviceId) + "/caches/"
+        + urlEncode(cacheName) + "/snapshot";
+    const auto resolutionValue = checkedHttpJson("http://" + aggregator.authority + resolvePath, 4096,
+        "Cache Aggregator resolution");
+    const auto& resolution = asObject(resolutionValue, "cache resolution response");
+    if (stringProperty(resolution, "serviceId") != serviceId
+        || stringProperty(resolution, "cacheName") != cacheName) {
+        throw std::runtime_error("Cache Aggregator returned a mismatched source");
+    }
+    const std::string snapshotUrl = stringProperty(resolution, "snapshotUrl");
+    (void)parseHttpUrl(snapshotUrl);
+    RemoteCacheSnapshot snapshot;
+    snapshot.instanceId = stringProperty(resolution, "instanceId");
+    std::set<std::string> seenKeys;
+    std::string cursor;
+    std::string fence;
+    int64_t total = -1;
+    int64_t sequence = -1;
+    for (int pageNumber = 0; pageNumber < 400; ++pageNumber) {
+        std::string pageUrl = snapshotUrl;
+        pageUrl += pageUrl.find('?') == std::string::npos ? "?" : "&";
+        pageUrl += "limit=2";
+        if (!cursor.empty()) pageUrl += "&cursor=" + urlEncode(cursor);
+        if (!fence.empty()) pageUrl += "&revision=" + urlEncode(fence);
+        const auto pageValue = checkedHttpJson(pageUrl, 4096, "Remote cache snapshot");
+        const auto& page = asObject(pageValue, "remote cache page");
+        if (safeInteger(property(page, "version"), "snapshot version") != 1)
+            throw std::runtime_error("Unsupported remote cache snapshot version");
+        const std::string revision = stringProperty(page, "revision");
+        const auto pageSequence = safeInteger(property(page, "sequence"), "snapshot sequence");
+        const auto sampledAtMs = safeInteger(property(page, "sampledAtMs"), "snapshot sample time");
+        const int64_t pageTotal = safeInteger(property(page, "total"), "snapshot total");
+        if (revision.empty() || revision.size() > 16
+            || !std::all_of(revision.begin(), revision.end(), [](unsigned char c) { return c >= '0' && c <= '9'; })
+            || pageTotal < 0 || pageTotal > 800 || pageSequence < 0 || sampledAtMs < 0)
+            throw std::runtime_error("Invalid remote cache snapshot envelope");
+        const auto collectorId = asString(property(page, "collectorId"), "snapshot collector ID");
+        const auto bootId = asString(property(page, "bootId"), "snapshot boot ID");
+        if (pageNumber == 0) {
+            snapshot.revision = revision;
+            snapshot.collectorId = collectorId;
+            snapshot.bootId = bootId;
+            total = pageTotal;
+            sequence = pageSequence;
+        } else if (revision != fence || revision != snapshot.revision || pageSequence != sequence
+            || pageTotal != total || collectorId != snapshot.collectorId || bootId != snapshot.bootId) {
+            throw std::runtime_error("Remote cache source changed during pagination");
+        }
+        const auto& records = arrayProperty(page, "records");
+        if (records.size() > 2) throw std::runtime_error("Remote cache page has too many records");
+        for (const auto& recordValue : records) {
+            const auto& record = asObject(recordValue, "remote cache record");
+            const std::string key = stringProperty(record, "key");
+            if (key.empty() || !seenKeys.insert(key).second)
+                throw std::runtime_error("Invalid or duplicate remote cache key");
+            const auto& device = property(record, "device");
+            if (!std::holds_alternative<JsonValue::Object>(device.value))
+                throw std::runtime_error("Remote cache device value must be an object");
+            const int64_t observationMs = safeInteger(property(record, "observationMs"), "observation time");
+            const int64_t observationSequence = safeInteger(property(record, "observationSequence"), "observation sequence");
+            const int64_t ttl = safeInteger(property(record, "remainingTTLms"), "remaining TTL");
+            if (observationMs < 0 || observationSequence < 0 || ttl < 0)
+                throw std::runtime_error("Invalid remote cache observation metadata");
+            CacheRow row;
+            row.values = {
+                {"cache_key", JsonValue{key}},
+                {"device_json", JsonValue{serializeJson(device)}},
+                {"observation_ms", JsonValue{static_cast<double>(observationMs)}},
+                {"observation_sequence", JsonValue{static_cast<double>(observationSequence)}},
+                {"remaining_ttl_ms", JsonValue{static_cast<double>(ttl)}}
+            };
+            row.metadata = {observationMs, observationSequence, ttl};
+            snapshot.rows.push_back(std::move(row));
+            if (snapshot.rows.size() > 800 || snapshot.rows.size() > static_cast<size_t>(total))
+                throw std::runtime_error("Remote cache snapshot exceeds its declared total");
+        }
+        const auto* errors = optionalProperty(page, "errors");
+        if (errors) {
+            for (const auto& error : requireArray(*errors)) {
+                snapshot.errors.push_back(error);
+                snapshot.complete = false;
+            }
+        }
+        const auto* complete = optionalProperty(page, "complete");
+        if (complete) {
+            const auto* boolean = std::get_if<bool>(&complete->value);
+            if (!boolean) throw std::runtime_error("Invalid remote cache completeness flag");
+            if (!*boolean) {
+                snapshot.complete = false;
+                if (snapshot.errors.empty()) snapshot.errors.push_back(JsonValue{"Nested source is incomplete"});
+            }
+        }
+        const std::string nextCursor = stringProperty(page, "nextCursor");
+        if (nextCursor.size() > 256) throw std::runtime_error("Invalid remote cache snapshot cursor");
+        if (nextCursor.empty()) {
+            if (static_cast<int64_t>(snapshot.rows.size()) != total)
+                throw std::runtime_error("Remote cache snapshot ended before its declared total");
+            return snapshot;
+        }
+        if (records.empty() || stringProperty(asObject(records.back(), "remote cache record"), "key") != nextCursor)
+            throw std::runtime_error("Invalid remote cache snapshot cursor");
+        cursor = nextCursor;
+        fence = revision;
+    }
+    throw std::runtime_error("Remote cache snapshot page limit exceeded");
+}
+
+std::string cacheRevision(const std::string& value) {
+    const std::string digest = sha256(value);
+    return std::to_string(std::stoull(digest.substr(0, 13), nullptr, 16));
+}
+
+HttpResponse hostedCacheSnapshot(const JsonValue& programMap, const std::string& serviceId,
+    const std::string& bootId, const std::string& aggregatorUrl, const std::string& cacheName,
+    const std::string& rawQuery) {
+    const auto query = parseQuery(rawQuery);
+    const std::string cursor = query.count("cursor") ? query.at("cursor") : "";
+    const std::string revisionFence = query.count("revision") ? query.at("revision") : "";
+    if (cursor.size() > 256 || revisionFence.size() > 16
+        || (!revisionFence.empty() && !std::all_of(revisionFence.begin(), revisionFence.end(),
+            [](unsigned char c) { return c >= '0' && c <= '9'; }))
+        || (!cursor.empty() && revisionFence.empty())) {
+        throw HttpError(400, "Invalid cache snapshot cursor or revision");
+    }
+    const auto& root = asObject(programMap, "program map");
+    const auto* declarationsValue = optionalProperty(root, "hostCaches");
+    if (!declarationsValue) throw HttpError(404, "Cache is not declared");
+    const auto& declarations = requireArray(*declarationsValue);
+    const JsonValue::Object* declaration = nullptr;
+    for (const auto& value : declarations) {
+        const auto& item = asObject(value, "cache declaration");
+        if (stringProperty(item, "name") == cacheName) { declaration = &item; break; }
+    }
+    if (!declaration) throw HttpError(404, "Cache is not declared");
+    const auto* virtualValue = optionalProperty(*declaration, "virtual");
+    if (!virtualValue || !std::get_if<bool>(&virtualValue->value) || !std::get<bool>(virtualValue->value))
+        throw HttpError(503, "Native host does not provide a physical hosted-cache store");
+    const auto* planValue = optionalProperty(*declaration, "queryPlan");
+    if (!planValue || !std::holds_alternative<JsonValue::Object>(planValue->value))
+        throw HttpError(503, "Native virtual caches require a read-only query plan");
+    if (aggregatorUrl.empty()) throw HttpError(503, "Native cache Aggregator URL is not configured");
+    const auto& plan = asObject(*planValue, "cache query plan");
+    const auto& sourceDefinitions = arrayProperty(*declaration, "sourceDefinitions");
+    CacheSourceRows sourceRows;
+    JsonValue::Array errors;
+    std::string stampData;
+    bool complete = true;
+    for (const auto& sourceValue : sourceDefinitions) {
+        const auto& source = asObject(sourceValue, "virtual cache source");
+        const std::string alias = stringProperty(source, "alias");
+        const std::string sourceService = stringProperty(source, "serviceId");
+        const std::string sourceCache = stringProperty(source, "cacheName");
+        const auto* localValue = optionalProperty(source, "local");
+        try {
+            if (localValue && std::get_if<bool>(&localValue->value) && std::get<bool>(localValue->value))
+                throw std::runtime_error("Native virtual cache does not support local cache sources");
+            const auto snapshot = fetchRemoteCacheSnapshot(aggregatorUrl, sourceService, sourceCache);
+            sourceRows[alias] = snapshot.rows;
+            stampData += alias + "|" + sourceService + "|" + sourceCache + "|" + snapshot.instanceId
+                + "|" + snapshot.revision + "|" + snapshot.collectorId + "|" + snapshot.bootId + ";";
+            if (!snapshot.complete) {
+                complete = false;
+                for (const auto& error : snapshot.errors) errors.push_back(JsonValue{JsonValue::Object{
+                    {"alias", JsonValue{alias}}, {"error", error}
+                }});
+            }
+        } catch (const std::exception& error) {
+            sourceRows[alias] = {};
+            complete = false;
+            const std::string message = error.what();
+            stampData += alias + "|" + sourceService + "|" + sourceCache + "|error:" + message + ";";
+            errors.push_back(JsonValue{JsonValue::Object{
+                {"alias", JsonValue{alias}}, {"serviceId", JsonValue{sourceService}},
+                {"cacheName", JsonValue{sourceCache}}, {"error", JsonValue{message}}
+            }});
+        }
+    }
+    const std::string revision = cacheRevision(cacheName + "|" + stampData);
+    if (!revisionFence.empty() && revisionFence != revision)
+        throw HttpError(409, "Cache snapshot revision changed");
+    const auto queryResults = executeNativeCacheQuery(plan, sourceRows);
+    const JsonValue* outputFieldsValue = optionalProperty(*declaration, "viewFields");
+    if (!outputFieldsValue) outputFieldsValue = optionalProperty(*declaration, "fields");
+    if (!outputFieldsValue) throw HttpError(503, "Cache query output fields are missing");
+    const auto& outputFields = requireArray(*outputFieldsValue);
+    JsonValue::Array allRecords;
+    const auto sampledAtMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    for (size_t index = 0; index < queryResults.size(); ++index) {
+        const auto& result = queryResults[index];
+        if (result.row.size() != outputFields.size()) throw HttpError(503, "Cache query result schema mismatch");
+        for (const auto& fieldValue : outputFields) {
+            const auto& field = asObject(fieldValue, "cache output field");
+            const std::string name = stringProperty(field, "name");
+            const std::string type = stringProperty(field, "type");
+            const auto value = result.row.find(name);
+            if (value == result.row.end()) throw HttpError(503, "Cache query output field is missing");
+            const bool valid = type == "string" ? std::holds_alternative<std::string>(value->second.value)
+                : type == "integer" ? std::get_if<double>(&value->second.value)
+                    && std::floor(std::get<double>(value->second.value)) == std::get<double>(value->second.value)
+                : type == "boolean" ? std::holds_alternative<bool>(value->second.value)
+                    || (std::get_if<double>(&value->second.value)
+                        && (std::get<double>(value->second.value) == 0 || std::get<double>(value->second.value) == 1))
+                : false;
+            if (!valid) throw HttpError(503, "Cache query result does not match its output schema");
+        }
+        allRecords.push_back(JsonValue{JsonValue::Object{
+            {"key", JsonValue{"q:" + std::to_string(index)}},
+            {"device", JsonValue{result.row}},
+            {"observationMs", JsonValue{static_cast<double>(result.metadata.observationMs)}},
+            {"observationSequence", JsonValue{static_cast<double>(result.metadata.observationSequence)}},
+            {"remainingTTLms", JsonValue{static_cast<double>(result.metadata.remainingTtlMs)}}
+        }});
+    }
+    size_t start = 0;
+    if (!cursor.empty()) {
+        const auto found = std::find_if(allRecords.begin(), allRecords.end(), [&](const JsonValue& value) {
+            return stringProperty(asObject(value, "cache result"), "key") == cursor;
+        });
+        if (found == allRecords.end()) throw HttpError(400, "Invalid cache snapshot cursor");
+        start = static_cast<size_t>(std::distance(allRecords.begin(), found)) + 1;
+    }
+    JsonValue::Array pageRecords;
+    for (size_t index = start; index < std::min(start + 2, allRecords.size()); ++index)
+        pageRecords.push_back(allRecords[index]);
+    const std::string nextCursor = start + pageRecords.size() < allRecords.size() && !pageRecords.empty()
+        ? stringProperty(asObject(pageRecords.back(), "cache result"), "key") : "";
+    JsonValue::Array records;
+    for (const auto& recordValue : pageRecords) {
+        const auto& record = asObject(recordValue, "cache result");
+        records.push_back(JsonValue{JsonValue::Object{
+            {"key", property(record, "key")}, {"device", property(record, "device")},
+            {"observationMs", property(record, "observationMs")},
+            {"observationSequence", property(record, "observationSequence")},
+            {"remainingTTLms", property(record, "remainingTTLms")}
+        }});
+    }
+    const auto sequence = safeInteger(JsonValue{std::strtod(revision.c_str(), nullptr)}, "cache revision");
+    JsonValue::Object response{
+        {"version", JsonValue{1.0}}, {"revision", JsonValue{revision}},
+        {"sequence", JsonValue{static_cast<double>(sequence)}},
+        {"sampledAtMs", JsonValue{static_cast<double>(sampledAtMs)}},
+        {"total", JsonValue{static_cast<double>(allRecords.size())}},
+        {"records", JsonValue{std::move(records)}}, {"nextCursor", JsonValue{nextCursor}},
+        {"complete", JsonValue{complete}}, {"errors", JsonValue{std::move(errors)}},
+        {"collectorId", JsonValue{serviceId}}, {"bootId", JsonValue{bootId}}
+    };
+    std::string body = serializeJson(JsonValue{std::move(response)});
+    if (body.size() > 2048) throw HttpError(503, "Native cache snapshot page exceeds 2048 bytes");
+    return {200, std::move(body)};
+}
+
 } // namespace
 
 NativeService::NativeService(std::string pcodeText, std::string programMapJson, uint64_t maxSteps,
-    std::map<std::string, StorageRootGrant> storageRoots, uint64_t maxFileBytes)
+    std::map<std::string, StorageRootGrant> storageRoots, uint64_t maxFileBytes, std::string aggregatorUrl)
     : pcodeText_(std::move(pcodeText)),
       programMapJson_(std::move(programMapJson)),
       maxSteps_(maxSteps),
       storageRoots_(std::move(storageRoots)),
-      maxFileBytes_(maxFileBytes) {
+      maxFileBytes_(maxFileBytes),
+      aggregatorUrl_(std::move(aggregatorUrl)) {
     if (maxFileBytes_ == 0 || maxFileBytes_ > 1000000) {
         throw std::runtime_error("Storage file capacity must be between 1 and 1000000 bytes");
     }
@@ -1797,9 +2537,24 @@ NativeService::NativeService(std::string pcodeText, std::string programMapJson, 
     }
     const auto program = parseProgram(pcodeText_);
     validateMap(JsonParser(programMapJson_).parse(), serviceId_, program, !storageRoots_.empty(), canWriteStorage);
+    if (!aggregatorUrl_.empty()) (void)parseHttpUrl(aggregatorUrl_);
+    bootId_ = serviceId_ + "-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
 }
 
 HttpResponse NativeService::dispatch(const HttpRequest& request) const {
+    constexpr const char* cachePrefix = "/api/hosted/caches/";
+    constexpr const char* cacheSuffix = "/snapshot";
+    if (request.method == "GET" && request.path.rfind(cachePrefix, 0) == 0
+        && request.path.size() > std::strlen(cachePrefix) + std::strlen(cacheSuffix)
+        && request.path.compare(request.path.size() - std::strlen(cacheSuffix),
+            std::strlen(cacheSuffix), cacheSuffix) == 0) {
+        const std::string cacheName = request.path.substr(std::strlen(cachePrefix),
+            request.path.size() - std::strlen(cachePrefix) - std::strlen(cacheSuffix));
+        if (!std::regex_match(cacheName, std::regex("[A-Za-z][A-Za-z0-9_-]{0,63}")))
+            throw HttpError(400, "Invalid hosted cache name");
+        return hostedCacheSnapshot(JsonParser(programMapJson_).parse(), serviceId_, bootId_,
+            aggregatorUrl_, cacheName, request.query);
+    }
     const auto parsed = parseProgram(pcodeText_);
     return execute(parsed, request, maxSteps_, storageRoots_, maxFileBytes_, JsonParser(programMapJson_).parse());
 }

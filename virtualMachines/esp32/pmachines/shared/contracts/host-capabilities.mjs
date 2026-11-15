@@ -5,7 +5,7 @@ export const HOST_PROFILES = Object.freeze({
   js: Object.freeze({ profile: 'desktop', runtime: 'javascript', filesystem: true }),
   esp32: Object.freeze({
     profile: 'embedded', runtime: 'esp32', filesystem: false,
-    capabilities: Object.freeze(['service.transaction'])
+    capabilities: Object.freeze(['service.transaction', 'bluetooth.discovery'])
   })
 });
 
