@@ -54,7 +54,8 @@ export async function startFederatedDeviceCache(config, logger = console, { coll
       await host.start();
       logger.log(`[DEVICE-FEDERATION] ${protocol}-js: separate p-machine/cache/boot, HTTP ${config.httpHost}:${config[`${protocol}HttpPort`]}, passive UDP ${config[`${protocol}UdpPort`]}`);
     }
-    const federation = createDeviceFederation({ logger, resolveName: resolveName ?? ssdpNames.resolve, sources: config.sources ?? [
+    const federation = createDeviceFederation({ logger, maxSources: config.sources?.length ?? 8,
+      resolveName: resolveName ?? ssdpNames.resolve, sources: config.sources ?? [
       collectors
         ? { protocol: 'kasa', collectorId: config.kasaCollectorId, origin: config.esp32Origin }
         : { protocol: 'kasa', collectorId: 'kasa-js', origin: `http://${config.httpHost}:${config.kasaHttpPort}` },

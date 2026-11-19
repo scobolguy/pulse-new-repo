@@ -8,6 +8,7 @@ import { createBoundedTextBindings } from '../../pmachines/javascript/src/bounde
 import { encodeHostedImage } from '../../pmachines/shared/contracts/hosted-image.mjs';
 import { attachPcodeSignature } from '../../aggregator/scripts/pcode-signing.mjs';
 import { createJsPmachineNodeServer } from '../../pmachines/javascript/server.mjs';
+import { compileSsdpCollector } from '../../../../languages/kotlin/src/ssdp-artifacts.mjs';
 
 const source = await fs.readFile(new URL('../../src/ssdp-collector-daemon.pas', import.meta.url), 'utf8');
 const ssdp = compile(source, { hostServices: true });
@@ -51,6 +52,51 @@ test('SSDP signed image fits existing capacity and protocol remains passive Pasc
   assert.ok(Number.parseInt(encodeHostedImage(ssdp.pcodeText).slice(4, 12), 16) <= 512);
   assert.deepEqual(ssdp.programMap.hostCaches, service.programMap.hostCaches);
   assert.doesNotMatch(source, /host\.(tcp_exchange|udp_exchange)|M-SEARCH/);
+});
+
+test('Pulse Kotlin SSDP accepts only matching announcements, deduplicates, expires and removes records', async t => {
+  const { daemon, service: compiled } = await compileSsdpCollector('js');
+  const embedded = await compileSsdpCollector('esp32');
+  for (const unit of Object.values(embedded)) {
+    assert.ok(Number.parseInt(encodeHostedImage(unit.pcodeText).slice(4, 12), 16) <= 512);
+    assert.doesNotMatch(unit.pcodeText, /host\.(udp_send|udp_exchange|tcp_exchange)/);
+  }
+  let now = 1000;
+  const { host, send } = await start(t, { compiled, daemons: [{ compiled: daemon, udpPort: 0 }], clock: () => now });
+  const read = async (endpoint, query = {}) => {
+    const response = await host.dispatch({ method: 'GET', path: `/api/ssdp/devices/${endpoint}`, query });
+    assert.equal(response.status, 200);
+    return response.body;
+  };
+  const id = uuid(1);
+  const name = `SSDP ${id}`;
+  const good = notification(id).toString();
+  for (const frame of [
+    good.replace('NOTIFY', 'M-SEARCH'),
+    good.replace(':1900', ':1901'),
+    good.replace('f0000000', 'z0000000'),
+    good.replace('::upnp:rootdevice', '::wrong'),
+    good.replace('max-age=1800', 'max-age=1bad'),
+    good.replace('max-age=1800', 'max-age=1, max-age=2')
+  ]) await send(Buffer.from(frame));
+  assert.deepEqual((await read('names')).names, []);
+  await send(notification(id, { age: '1' }));
+  now = 1500;
+  await send(notification(id.toUpperCase(), {
+    nts: 'ssdp:update', age: '99999999999999999', nt: 'urn:schemas-upnp-org:service:ContentDirectory:1'
+  }));
+  now = 2400;
+  assert.deepEqual((await read('names')).names, [name]);
+  const snapshot = await read('snapshot');
+  assert.equal(snapshot.records.length, 1);
+  assert.equal(snapshot.records[0].device.address, '127.0.0.1');
+  now = 181500;
+  assert.deepEqual((await read('names')).names, []);
+  await send(notification(id, { nt: `uuid:${id}` }));
+  assert.deepEqual((await read('names')).names, [name]);
+  await send(notification(id, { nts: 'ssdp:byebye' }));
+  assert.deepEqual((await read('names')).names, []);
+  assert.equal(host.getStatus().daemonDiagnostics[0].failures, 0);
 });
 
 test('actual NOTIFY frames deduplicate service variants, update TTL and remove byebye', async t => {

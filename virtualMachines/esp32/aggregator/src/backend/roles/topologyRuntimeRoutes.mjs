@@ -11,6 +11,7 @@ import { enrichDiscoveredNode } from '../modules/nodeDiscovery.mjs';
 import { isFreshDiscoveryNode, pruneDiscoveryNodes } from '../../discovery-topology.mjs';
 import { registerNodeAnnouncementRoute } from '../modules/discoveryCollector.mjs';
 import { createEsp32DagScheduler } from '../../../../../../languages/pascalish/src/esp32-dag-swarm.mjs';
+import { checkPmachineRuntimeCompatibility } from '../../../../pmachines/shared/contracts/runtime-profile.mjs';
 
 const NODE_RENAME_OVERRIDES_PATH = path.resolve(process.cwd(), 'data', 'node-rename-overrides.json');
 const NODE_TOPOLOGY_OVERRIDES_PATH = path.resolve(process.cwd(), 'data', 'node-topology-overrides.json');
@@ -4208,6 +4209,43 @@ export function registerTopologyRuntimeRoutes(app, deps) {
             error: 'target is reachable but does not expose the hosted service runtime',
             detail: String(preflight.body || preflight.raw || `HTTP ${preflight.status}`)
           });
+        }
+
+        const runtimeProfile = preflight.body?.runtimeProfile;
+        if (!runtimeProfile) {
+          return res.status(409).json({
+            error: 'target runtime does not advertise a PMachine runtime profile'
+          });
+        }
+        const contentByPath = new Map((Array.isArray(body.files) ? body.files : [])
+          .map(file => [String(file?.path || '').trim(), file?.content]));
+        const mapPaths = [serviceMap, ...daemons.map(daemon => String(daemon.map).trim())];
+        for (const mapPath of mapPaths) {
+          const contents = contentByPath.get(mapPath);
+          if (typeof contents !== 'string') {
+            return res.status(400).json({ error: `program map content is missing for ${mapPath}` });
+          }
+          let programMap;
+          try {
+            programMap = JSON.parse(contents);
+          } catch {
+            return res.status(400).json({ error: `program map is invalid JSON: ${mapPath}` });
+          }
+          if (!Array.isArray(programMap.targets) || !programMap.targets.includes('esp32')) {
+            return res.status(409).json({ error: `program map does not target ESP32: ${mapPath}` });
+          }
+          const compatibility = checkPmachineRuntimeCompatibility(runtimeProfile, {
+            target: 'esp32',
+            hostBindingsVersion: programMap.hostBindingsVersion ?? null,
+            hostCapabilitiesVersion: programMap.hostCapabilitiesVersion ?? null,
+            requiredHostCapabilities: programMap.requiredHostCapabilities ?? []
+          });
+          if (!compatibility.compatible) {
+            return res.status(409).json({
+              error: `target runtime is incompatible with ${mapPath}`,
+              incompatibilities: compatibility.errors
+            });
+          }
         }
       }
 

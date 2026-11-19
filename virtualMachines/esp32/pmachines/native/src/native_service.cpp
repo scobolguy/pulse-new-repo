@@ -1,5 +1,7 @@
 #include "native_service.hpp"
 #include "../../arduino/src/byte_buffer.h"
+#include "xml_record_stream.hpp"
+#include "../../shared/slot-scheduler/slot_scheduler_pcode.h"
 
 #include <algorithm>
 #include <array>
@@ -15,11 +17,13 @@
 #include <istream>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <ostream>
 #include <sstream>
 #include <set>
 #include <stdexcept>
+#include <tuple>
 #include <regex>
 #include <chrono>
 #include <ctime>
@@ -54,6 +58,30 @@ struct JsonValue {
     std::variant<std::nullptr_t, bool, double, std::string, Array, Object> value;
 };
 
+void appendUtf8(std::string& output, uint32_t codePoint);
+
+uint32_t readCodepoint(const std::string& text, size_t& index) {
+    if (index >= text.size()) throw std::runtime_error("Invalid text index");
+    const auto first = static_cast<unsigned char>(text[index++]);
+    unsigned int continuation = 0;
+    uint32_t point = first;
+    uint32_t minimum = 0;
+    if (first >= 0xc2 && first <= 0xdf) { continuation = 1; point = first & 0x1f; minimum = 0x80; }
+    else if (first >= 0xe0 && first <= 0xef) { continuation = 2; point = first & 0x0f; minimum = 0x800; }
+    else if (first >= 0xf0 && first <= 0xf4) { continuation = 3; point = first & 0x07; minimum = 0x10000; }
+    else if (first >= 0x80) throw std::runtime_error("Invalid UTF-8 text");
+    if (continuation > text.size() - index) throw std::runtime_error("Invalid UTF-8 text");
+    for (unsigned int part = 0; part < continuation; ++part) {
+        const auto byte = static_cast<unsigned char>(text[index++]);
+        if ((byte & 0xc0) != 0x80) throw std::runtime_error("Invalid UTF-8 text");
+        point = (point << 6) | (byte & 0x3f);
+    }
+    if (point < minimum || point > 0x10ffff || (point >= 0xd800 && point <= 0xdfff)) {
+        throw std::runtime_error("Invalid UTF-8 text");
+    }
+    return point;
+}
+
 class JsonParser {
 public:
     explicit JsonParser(const std::string& input) : input_(input) {}
@@ -86,25 +114,6 @@ private:
             return true;
         }
         return false;
-    }
-
-    static void appendUtf8(std::string& result, uint32_t codePoint) {
-        if (codePoint <= 0x7f) result.push_back(static_cast<char>(codePoint));
-        else if (codePoint <= 0x7ff) {
-            result.push_back(static_cast<char>(0xc0 | (codePoint >> 6)));
-            result.push_back(static_cast<char>(0x80 | (codePoint & 0x3f)));
-        } else if (codePoint <= 0xffff) {
-            result.push_back(static_cast<char>(0xe0 | (codePoint >> 12)));
-            result.push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3f)));
-            result.push_back(static_cast<char>(0x80 | (codePoint & 0x3f)));
-        } else if (codePoint <= 0x10ffff) {
-            result.push_back(static_cast<char>(0xf0 | (codePoint >> 18)));
-            result.push_back(static_cast<char>(0x80 | ((codePoint >> 12) & 0x3f)));
-            result.push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3f)));
-            result.push_back(static_cast<char>(0x80 | (codePoint & 0x3f)));
-        } else {
-            throw std::runtime_error("Invalid Unicode code point");
-        }
     }
 
     uint32_t hex4() {
@@ -254,6 +263,7 @@ struct Instruction {
     int argumentCount = 0;
     size_t sourceLine = 0;
     std::string sourceText;
+    bool decodedString = false;
 };
 
 struct Program {
@@ -365,7 +375,16 @@ Program parseProgram(const std::string& text) {
                 "host.string_compare", "host.date_iso", "host.date_parse", "host.date_now",
                 "host.fs_read_text", "host.fs_read_text_auto", "host.fs_write_text",
                 "host.fs_exists", "host.fs_resolve_relative",
-                "host.bytes_from_text", "host.bytes_text", "host.bytes_length", "host.bytes_get", "host.bytes_join"
+                "host.xml_stream_open", "host.xml_stream_next", "host.xml_stream_next_record",
+                "host.xml_stream_close", "host.xml_escape_text",
+                "host.bytes_from_text", "host.bytes_text", "host.bytes_length", "host.bytes_get", "host.bytes_join",
+                "host.string_length", "host.string_codepoint_at", "host.string_codepoint_width",
+                "host.string_from_codepoint", "host.integer_text", "host.resource_read", "host.resource_write",
+                "host.blob_load", "host.blob_store", "host.cobol_text", "host.cobol_unpad",
+                "host.scheduler_operation", "host.scheduler_request", "host.scheduler_read",
+                "host.scheduler_slot", "host.scheduler_stage", "host.scheduler_activate",
+                "host.scheduler_remove", "host.scheduler_saved_state", "host.scheduler_commit",
+                "host.scheduler_error", "host.scheduler_respond"
             };
             if (std::find(bindings.begin(), bindings.end(), instruction.operand) == bindings.end()) {
                 throw std::runtime_error("Native service host does not support binding " + instruction.operand);
@@ -385,6 +404,14 @@ Program parseProgram(const std::string& text) {
 
 struct PValue {
     std::variant<int64_t, std::string> value = int64_t{0};
+};
+
+using InternalHostBinding = std::function<PValue(const std::string&, const std::vector<PValue>&)>;
+
+struct ImageInvocation {
+    image::Context::Call& call;
+    const std::vector<image::Scalar>& args;
+    image::Scalar result = int64_t{0};
 };
 
 std::string jsonQuote(const std::string& value) {
@@ -552,25 +579,35 @@ std::string sha256(const std::string& input) {
     return result.str();
 }
 
+std::string hmacSha256Hex(const std::string& key, const std::string& message) {
+    std::string normalizedKey = key;
+    if (normalizedKey.size() > 64) normalizedKey = sha256(normalizedKey);
+    normalizedKey.resize(64, '\0');
+    std::string inner(64, '\0');
+    std::string outer(64, '\0');
+    for (size_t index = 0; index < 64; ++index) {
+        const auto byte = static_cast<unsigned char>(normalizedKey[index]);
+        inner[index] = static_cast<char>(byte ^ 0x36);
+        outer[index] = static_cast<char>(byte ^ 0x5c);
+    }
+    return sha256(outer + sha256(inner + message));
+}
+
+bool constantTimeEqual(const std::string& left, const std::string& right) {
+    size_t mismatch = left.size() ^ right.size();
+    const size_t count = std::max(left.size(), right.size());
+    for (size_t index = 0; index < count; ++index) {
+        const unsigned char a = index < left.size() ? static_cast<unsigned char>(left[index]) : 0;
+        const unsigned char b = index < right.size() ? static_cast<unsigned char>(right[index]) : 0;
+        mismatch |= static_cast<size_t>(a ^ b);
+    }
+    return mismatch == 0;
+}
+
 std::string utf16le(const std::string& text) {
     std::string result;
     for (size_t index = 0; index < text.size();) {
-        const auto first = static_cast<unsigned char>(text[index++]);
-        uint32_t codePoint = first;
-        unsigned int continuation = 0;
-        if (first >= 0xf0) { codePoint = first & 0x07; continuation = 3; }
-        else if (first >= 0xe0) { codePoint = first & 0x0f; continuation = 2; }
-        else if (first >= 0xc2) { codePoint = first & 0x1f; continuation = 1; }
-        else if (first >= 0x80) throw std::runtime_error("Invalid UTF-8 text");
-        if (index + continuation > text.size()) throw std::runtime_error("Invalid UTF-8 text");
-        for (unsigned int part = 0; part < continuation; ++part) {
-            const auto byte = static_cast<unsigned char>(text[index++]);
-            if ((byte & 0xc0) != 0x80) throw std::runtime_error("Invalid UTF-8 text");
-            codePoint = (codePoint << 6) | (byte & 0x3f);
-        }
-        if (codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
-            throw std::runtime_error("Invalid UTF-8 text");
-        }
+        uint32_t codePoint = readCodepoint(text, index);
         if (codePoint <= 0xffff) {
             result.push_back(static_cast<char>(codePoint));
             result.push_back(static_cast<char>(codePoint >> 8));
@@ -808,6 +845,9 @@ void validateUtf8(const std::string& text) {
 }
 
 void appendUtf8(std::string& output, uint32_t codePoint) {
+    if (codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
+        throw std::runtime_error("Invalid Unicode code point");
+    }
     if (codePoint <= 0x7f) output.push_back(static_cast<char>(codePoint));
     else if (codePoint <= 0x7ff) {
         output.push_back(static_cast<char>(0xc0 | (codePoint >> 6)));
@@ -1076,10 +1116,16 @@ void writeDebugEvent(std::ostream& output, const std::string& event) {
     if (!output) throw std::runtime_error("Unable to write debugger event");
 }
 
+std::string rawResourceRequest(const std::string& service, const std::string& route,
+    const std::string& body, bool write, const std::string& librarianUrl, const std::string& brokerUrl);
+
 HttpResponse execute(const Program& program, const HttpRequest& request, uint64_t maxSteps,
     const std::map<std::string, StorageRootGrant>& storageRoots, uint64_t maxFileBytes,
-    const JsonValue& programMap, std::istream* debugInput = nullptr,
-    std::ostream* debugOutput = nullptr, std::set<size_t> breakpoints = {}) {
+    const JsonValue& programMap, std::map<std::string, std::string>& blobs,
+    const std::string& librarianUrl, const std::string& brokerUrl, std::istream* debugInput = nullptr,
+    std::ostream* debugOutput = nullptr, std::set<size_t> breakpoints = {},
+    ImageInvocation* imageInvocation = nullptr, const InternalHostBinding* internalBinding = nullptr,
+    size_t startPc = 0) {
     std::vector<PValue> stack;
     std::vector<std::map<std::string, PValue>> variables(1);
     std::vector<size_t> returns;
@@ -1088,9 +1134,20 @@ HttpResponse execute(const Program& program, const HttpRequest& request, uint64_
         std::map<std::string, int64_t> children;
     };
     std::vector<std::vector<JsonNode>> jsonHandles;
+    std::map<int64_t, XmlRecordStream> xmlStreams;
+    int64_t nextXmlHandle = 1;
     std::string responseBody;
+    std::string responseContentType = "application/json; charset=utf-8";
     int responseStatus = 200;
-    size_t pc = 0;
+    size_t pc = imageInvocation ? imageInvocation->call.entry().entry : startPc;
+    if (imageInvocation) {
+        for (const auto& pair : imageInvocation->call.globals())
+            variables.front().emplace(pair.first, PValue{pair.second});
+        variables.emplace_back();
+        const auto& params = imageInvocation->call.entry().params;
+        for (size_t i = 0; i < params.size(); ++i)
+            variables.back().emplace(params[i], PValue{imageInvocation->args[i]});
+    }
     uint64_t steps = 0;
     auto pop = [&]() {
         if (stack.empty()) throw std::runtime_error("P-code stack underflow");
@@ -1131,6 +1188,8 @@ HttpResponse execute(const Program& program, const HttpRequest& request, uint64_
         throw std::runtime_error("Unsupported debugger command: " + name);
     };
     while (pc < program.instructions.size()) {
+        if (imageInvocation && (stack.size() > 4096 || returns.size() > 256))
+            throw std::runtime_error("Image execution capacity exceeded");
         if (maxSteps && ++steps > maxSteps) throw std::runtime_error("Native p-code instruction budget exceeded");
         if (!maxSteps) ++steps;
         if (stack.size() > 256) throw std::runtime_error("Native p-code operand stack capacity exceeded");
@@ -1169,7 +1228,7 @@ HttpResponse execute(const Program& program, const HttpRequest& request, uint64_
         if (instruction.op == "NOP") { ++pc; continue; }
         if (instruction.op == "HALT") break;
         if (instruction.op == "PUSH_STR") {
-            stack.push_back(PValue{decodeQuoted(instruction.operand)});
+            stack.push_back(PValue{instruction.decodedString ? instruction.operand : decodeQuoted(instruction.operand)});
             ++pc;
             continue;
         }
@@ -1283,6 +1342,12 @@ HttpResponse execute(const Program& program, const HttpRequest& request, uint64_
             std::vector<PValue> args(static_cast<size_t>(instruction.argumentCount));
             for (int i = instruction.argumentCount - 1; i >= 0; --i) args[static_cast<size_t>(i)] = pop();
             std::map<std::string, PValue> frame;
+            if (imageInvocation) {
+                const auto& entry = image::entryAt(imageInvocation->call.image(),
+                    static_cast<uint32_t>(instruction.target));
+                for (size_t i = 0; i < entry.params.size(); ++i)
+                    frame.emplace(entry.params[i], std::move(args[i]));
+            } else {
             const auto& root = asObject(programMap, "root");
             const auto procedures = root.find("procedures");
             if (procedures != root.end()) {
@@ -1296,6 +1361,7 @@ HttpResponse execute(const Program& program, const HttpRequest& request, uint64_
                         frame.emplace(std::get<std::string>(params[index].value), std::move(args[index]));
                 } else if (!args.empty()) throw std::runtime_error("Missing native procedure signature");
             } else if (!args.empty()) throw std::runtime_error("Missing native procedure signatures");
+            }
             returns.push_back(pc + 1);
             variables.push_back(std::move(frame));
             pc = instruction.target;
@@ -1312,7 +1378,10 @@ HttpResponse execute(const Program& program, const HttpRequest& request, uint64_
             std::vector<PValue> args(static_cast<size_t>(instruction.argumentCount));
             for (int i = instruction.argumentCount - 1; i >= 0; --i) args[static_cast<size_t>(i)] = pop();
             PValue result;
-            if (instruction.operand == "host.event_body" && args.empty()) result.value = request.body;
+            if (instruction.operand.rfind("host.scheduler_", 0) == 0) {
+                if (!internalBinding) throw std::runtime_error("Internal scheduler binding is unavailable");
+                result = (*internalBinding)(instruction.operand, args);
+            } else if (instruction.operand == "host.event_body" && args.empty()) result.value = request.body;
             else if (instruction.operand == "host.event_method" && args.empty()) result.value = request.method;
             else if (instruction.operand == "host.event_path" && args.empty()) result.value = request.path;
             else if (instruction.operand == "host.event_peer" && args.empty()) result.value = request.peer;
@@ -1322,6 +1391,65 @@ HttpResponse execute(const Program& program, const HttpRequest& request, uint64_
                 if (status < 200 || status > 599) throw std::runtime_error("Invalid HTTP status");
                 responseStatus = static_cast<int>(status);
                 result.value = int64_t{0};
+            } else if (instruction.operand == "host.resource_read" && args.size() == 2) {
+                result.value = rawResourceRequest(requireText(args[0], "service"), requireText(args[1], "route"),
+                    "", false, librarianUrl, brokerUrl);
+            } else if (instruction.operand == "host.resource_write" && args.size() == 3) {
+                result.value = rawResourceRequest(requireText(args[0], "service"), requireText(args[1], "route"),
+                    requireText(args[2], "body"), true, librarianUrl, brokerUrl);
+            } else if (instruction.operand == "host.blob_load" && args.size() == 1) {
+                const auto& key = requireText(args[0], "opaque storage key");
+                if (key.empty() || key.size() > 256) throw std::runtime_error("Invalid opaque storage key");
+                const auto found = blobs.find(key);
+                result.value = found == blobs.end() ? std::string{} : found->second;
+            } else if (instruction.operand == "host.blob_store" && args.size() == 2) {
+                const auto& key = requireText(args[0], "opaque storage key");
+                const auto& value = requireText(args[1], "opaque storage value");
+                if (key.empty() || key.size() > 256 || value.size() > 20000000) {
+                    throw std::runtime_error("Invalid opaque storage value");
+                }
+                if (value.empty()) blobs.erase(key);
+                else blobs[key] = value;
+                result.value = int64_t{0};
+            } else if (instruction.operand == "host.xml_stream_open" && args.size() == 5) {
+                const auto allowedJson = parseJson(requireText(args[4], "XML path manifest"));
+                const auto& allowedArray = requireArray(allowedJson);
+                std::set<std::string> allowedPaths;
+                for (const auto& item : allowedArray) {
+                    const auto* path = std::get_if<std::string>(&item.value);
+                    if (!path) throw std::runtime_error("Invalid XML stream path manifest");
+                    allowedPaths.insert(*path);
+                }
+                if (allowedPaths.size() != allowedArray.size()) {
+                    throw std::runtime_error("Duplicate XML stream path in manifest");
+                }
+                if (xmlStreams.size() >= 8) throw std::runtime_error("XML stream capacity exceeded");
+                const auto handle = nextXmlHandle++;
+                xmlStreams.emplace(std::piecewise_construct,
+                    std::forward_as_tuple(handle),
+                    std::forward_as_tuple(requireText(args[0], "XML text"),
+                        requireText(args[1], "XML record path"),
+                        requireText(args[2], "XML header path"),
+                        requireText(args[3], "XML namespace"),
+                        std::move(allowedPaths)));
+                result.value = handle;
+            } else if (instruction.operand == "host.xml_stream_next" && args.size() == 1) {
+                const auto handle = asInt(args[0]);
+                const auto stream = xmlStreams.find(handle);
+                if (stream == xmlStreams.end()) throw std::runtime_error("Invalid XML stream handle");
+                result.value = stream->second.nextEventJson();
+                if (std::get<std::string>(result.value).empty()) xmlStreams.erase(stream);
+            } else if (instruction.operand == "host.xml_stream_next_record" && args.size() == 1) {
+                const auto handle = asInt(args[0]);
+                const auto stream = xmlStreams.find(handle);
+                if (stream == xmlStreams.end()) throw std::runtime_error("Invalid XML stream handle");
+                result.value = stream->second.nextRecordJson();
+                if (std::get<std::string>(result.value).empty()) xmlStreams.erase(stream);
+            } else if (instruction.operand == "host.xml_stream_close" && args.size() == 1) {
+                xmlStreams.erase(asInt(args[0]));
+                result.value = int64_t{1};
+            } else if (instruction.operand == "host.xml_escape_text" && args.size() == 1) {
+                result.value = XmlRecordStream::escapeText(requireText(args[0], "XML text to escape"));
             } else if (instruction.operand == "host.bytes_from_text" && args.size() == 1) {
                 const auto& text = requireText(args[0], "byte text");
                 if (text.size() > 4096) throw std::runtime_error("Byte capacity exceeded");
@@ -1562,6 +1690,41 @@ HttpResponse execute(const Program& program, const HttpRequest& request, uint64_
             } else if (instruction.operand == "host.string_index" && args.size() == 2) {
                 const auto index = requireText(args[0], "text").find(requireText(args[1], "substring"));
                 result.value = static_cast<int64_t>(index == std::string::npos ? -1 : index);
+            } else if (instruction.operand == "host.string_length" && args.size() == 1) {
+                result.value = static_cast<int64_t>(requireText(args[0], "text").size());
+            } else if ((instruction.operand == "host.string_codepoint_at" ||
+                        instruction.operand == "host.string_codepoint_width") && args.size() == 2) {
+                const auto& text = requireText(args[0], "text");
+                const auto start = requireInteger(args[1], "text index");
+                if (start < 0) throw std::runtime_error("Invalid text index");
+                size_t index = static_cast<size_t>(start);
+                const auto point = readCodepoint(text, index);
+                result.value = instruction.operand == "host.string_codepoint_at"
+                    ? static_cast<int64_t>(point) : static_cast<int64_t>(index - static_cast<size_t>(start));
+            } else if (instruction.operand == "host.string_from_codepoint" && args.size() == 1) {
+                const auto point = requireInteger(args[0], "Unicode code point");
+                if (point < 0 || point > 0x10ffff) throw std::runtime_error("Invalid Unicode code point");
+                std::string text;
+                appendUtf8(text, static_cast<uint32_t>(point));
+                result.value = std::move(text);
+            } else if (instruction.operand == "host.integer_text" && args.size() == 1) {
+                result.value = std::to_string(requireInteger(args[0], "integer"));
+            } else if (instruction.operand == "host.cobol_text" && args.size() == 2) {
+                const auto& text = requireText(args[0], "COBOL text");
+                const auto width = requireInteger(args[1], "COBOL text width");
+                if (width < 1 || width > 4096 || text.size() > 4096 || std::any_of(text.begin(), text.end(),
+                    [](unsigned char ch) { return ch > 127; })) {
+                    throw std::runtime_error("Invalid COBOL text bounds");
+                }
+                auto converted = text.substr(0, static_cast<size_t>(width));
+                converted.resize(static_cast<size_t>(width), ' ');
+                result.value = std::move(converted);
+            } else if (instruction.operand == "host.cobol_unpad" && args.size() == 1) {
+                const auto& text = requireText(args[0], "COBOL text");
+                if (text.size() > 4096 || std::any_of(text.begin(), text.end(),
+                    [](unsigned char ch) { return ch > 127; })) throw std::runtime_error("Invalid COBOL text bounds");
+                const auto end = text.find_last_not_of(' ');
+                result.value = end == std::string::npos ? std::string{} : text.substr(0, end + 1);
             } else if (instruction.operand == "host.text_index" && args.size() == 2) {
                 const auto index = requireText(args[0], "text").find(requireText(args[1], "substring"));
                 result.value = static_cast<int64_t>(index == std::string::npos ? -1 : index);
@@ -1689,14 +1852,24 @@ HttpResponse execute(const Program& program, const HttpRequest& request, uint64_
                 result.value = resolveRelativeStoragePath(storageRoots, requireText(args[0], "storage root"),
                     requireText(args[1], "base storage path"), requireText(args[2], "relative storage reference"));
             } else if (instruction.operand == "host.raise_error" && args.size() == 1) {
-                throw std::runtime_error("Program failure: " + requireText(args[0], "failure message"));
+                const auto& message = requireText(args[0], "failure message");
+                if (message.rfind("XML_DIAGNOSTIC|", 0) == 0 || message.rfind("XML_RESPONSE|", 0) == 0) {
+                    throw std::runtime_error(message);
+                }
+                throw std::runtime_error("Program failure: " + message);
             } else throw std::runtime_error("Invalid arguments for native binding " + instruction.operand);
             stack.push_back(std::move(result));
             ++pc;
             continue;
         }
         if (instruction.op == "STORE" || instruction.op == "STORE_NAME") {
-            variables.back()[instruction.operand] = pop();
+            auto value = pop();
+            if (imageInvocation) {
+                auto owner = variables.rbegin();
+                while (owner != variables.rend() && owner->count(instruction.operand) == 0) ++owner;
+                if (owner == variables.rend()) variables.back()[instruction.operand] = std::move(value);
+                else (*owner)[instruction.operand] = std::move(value);
+            } else variables.back()[instruction.operand] = std::move(value);
             ++pc;
             continue;
         }
@@ -1712,7 +1885,12 @@ HttpResponse execute(const Program& program, const HttpRequest& request, uint64_
                     (void)JsonParser(*string).parse();
                     responseBody = *string;
                 } catch (...) {
-                    responseBody = jsonQuote(*string);
+                    if (string->rfind("<?xml", 0) == 0 || string->rfind("<Document", 0) == 0) {
+                        responseBody = *string;
+                        responseContentType = "application/xml; charset=utf-8";
+                    } else {
+                        responseBody = jsonQuote(*string);
+                    }
                 }
             } else responseBody = std::to_string(asInt(*value));
             ++pc;
@@ -1720,26 +1898,39 @@ HttpResponse execute(const Program& program, const HttpRequest& request, uint64_
         }
         throw std::runtime_error("Native service host does not support opcode " + instruction.op);
     }
+    if (imageInvocation) {
+        const auto expected = imageInvocation->call.entry().returnsValue ? 1u : 0u;
+        if (stack.size() != expected) throw std::runtime_error("Image return stack mismatch");
+        if (expected) imageInvocation->result = stack.back().value;
+        for (auto& pair : imageInvocation->call.globals())
+            pair.second = variables.front().at(pair.first).value;
+    }
     if (responseBody.empty()) responseBody = "{}";
     if (debugOutput) {
         writeDebugEvent(*debugOutput, "{\"event\":\"terminated\",\"status\":" +
             std::to_string(responseStatus) + ",\"body\":" + jsonQuote(responseBody) + "}");
     }
-    return HttpResponse{responseStatus, std::move(responseBody)};
+    return HttpResponse{responseStatus, std::move(responseBody), std::move(responseContentType)};
 }
 
 void validateMap(const JsonValue& map, std::string& serviceId, const Program& program,
-    bool canReadStorage, bool canWriteStorage) {
+    bool canReadStorage, bool canWriteStorage, bool canReadArtifacts, bool canPublish,
+    const std::string& expectedKind = "service") {
     const auto& root = asObject(map, "root");
     if (asInteger(property(root, "hostBindingsVersion"), "hostBindingsVersion") != 1) {
         throw std::runtime_error("Unsupported service host bindings version");
+    }
+    const auto* hostCapabilitiesVersion = optionalProperty(root, "hostCapabilitiesVersion");
+    if (hostCapabilitiesVersion
+        && asInteger(*hostCapabilitiesVersion, "hostCapabilitiesVersion") != 1) {
+        throw std::runtime_error("Unsupported host capabilities version");
     }
     if (!containsString(property(root, "targets"), "native")) {
         throw std::runtime_error("Program map does not advertise the native target");
     }
     const auto& runtimeUnit = asObject(property(root, "runtimeUnit"), "runtimeUnit");
-    if (asString(property(runtimeUnit, "kind"), "runtimeUnit.kind") != "service") {
-        throw std::runtime_error("Native host accepts service artifacts only");
+    if (asString(property(runtimeUnit, "kind"), "runtimeUnit.kind") != expectedKind) {
+        throw std::runtime_error("Native host runtime unit kind mismatch");
     }
     serviceId = asString(property(runtimeUnit, "id"), "runtimeUnit.id");
     if (serviceId.empty()) throw std::runtime_error("Program map service ID is empty");
@@ -1750,6 +1941,15 @@ void validateMap(const JsonValue& map, std::string& serviceId, const Program& pr
     bool needsFilesystemWrite = false;
     for (const auto& instruction : program.instructions) {
         if (instruction.op != "CALL_EXT") continue;
+        if (instruction.operand.rfind("host.scheduler_", 0) == 0) {
+            throw std::runtime_error("Uploaded programs cannot use internal scheduler bindings");
+        }
+        if (instruction.operand == "host.resource_read" && !canReadArtifacts) {
+            throw std::runtime_error("Native host does not provide requested host capability artifact.read");
+        }
+        if (instruction.operand == "host.resource_write" && !canPublish) {
+            throw std::runtime_error("Native host does not provide requested host capability broker.publish");
+        }
         if (instruction.operand == "host.fs_read_text" || instruction.operand == "host.fs_read_text_auto" ||
             instruction.operand == "host.fs_exists" || instruction.operand == "host.fs_resolve_relative") {
             needsFilesystemRead = true;
@@ -1768,6 +1968,9 @@ void validateMap(const JsonValue& map, std::string& serviceId, const Program& pr
         const auto& capability = asString(item, "requiredHostCapabilities item");
         if (capability == "filesystem.read" && canReadStorage) continue;
         if (capability == "filesystem.write" && canWriteStorage) continue;
+        if (capability == "xml.stream") continue;
+        if (capability == "artifact.read" && canReadArtifacts) continue;
+        if (capability == "broker.publish" && canPublish) continue;
         throw std::runtime_error("Native host does not provide requested host capability " + capability);
     }
 }
@@ -1884,7 +2087,8 @@ struct HttpGetResult {
     std::string body;
 };
 
-HttpGetResult httpGet(const std::string& url, size_t maxBodyBytes = 65536) {
+HttpGetResult httpGet(const std::string& url, size_t maxBodyBytes = 65536,
+    const std::string& method = "GET", const std::string& requestBody = {}) {
     const auto parsedUrl = parseHttpUrl(url);
     addrinfo hints{};
     hints.ai_family = AF_UNSPEC;
@@ -1912,8 +2116,10 @@ HttpGetResult httpGet(const std::string& url, size_t maxBodyBytes = 65536) {
     }
     freeaddrinfo(addresses);
     if (socket == INVALID_CACHE_SOCKET) throw std::runtime_error("Unable to connect to cache URL");
-    const std::string request = "GET " + parsedUrl.target + " HTTP/1.1\r\nHost: " +
-        parsedUrl.authority + "\r\nAccept: application/json\r\nConnection: close\r\n\r\n";
+    const std::string request = method + " " + parsedUrl.target + " HTTP/1.1\r\nHost: " +
+        parsedUrl.authority + "\r\nAccept: application/json\r\nConnection: close\r\n" +
+        (method == "POST" ? "Content-Type: application/json\r\nContent-Length: " +
+            std::to_string(requestBody.size()) + "\r\n" : "") + "\r\n" + requestBody;
     if (!sendCacheRequest(socket, request)) {
         closeCacheSocket(socket);
         throw std::runtime_error("Unable to send cache HTTP request");
@@ -1977,6 +2183,59 @@ HttpGetResult httpGet(const std::string& url, size_t maxBodyBytes = 65536) {
         throw std::runtime_error("Incomplete or oversized cache HTTP body");
     }
     return {status, std::move(body)};
+}
+
+std::string rawResourceRequest(const std::string& service, const std::string& route,
+    const std::string& body, bool write, const std::string& librarianUrl, const std::string& brokerUrl) {
+    const auto& origin = service == "librarian" && !write ? librarianUrl
+        : service == "broker" && write ? brokerUrl : std::string{};
+    if (origin.empty()) throw std::runtime_error("Raw " + service + " transport is not configured");
+    const std::string prefix = write ? "/api/queue/" : "/api/librarian/";
+    if (route.rfind(prefix, 0) != 0 || route.find_first_of("\\#") != std::string::npos
+        || std::any_of(route.begin(), route.end(), [](unsigned char ch) { return ch <= 32; })) {
+        throw std::runtime_error("Invalid raw resource reference");
+    }
+    if (write) {
+        const auto queueEnd = route.find('/', prefix.size());
+        if (queueEnd == std::string::npos || queueEnd == prefix.size() || route.substr(queueEnd) != "/enqueue") {
+            throw std::runtime_error("Raw broker transport only permits enqueue");
+        }
+    }
+    const auto path = route.substr(0, route.find('?'));
+    auto hex = [](unsigned char ch) -> int {
+        if (ch >= '0' && ch <= '9') return ch - '0';
+        if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+        if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+        return -1;
+    };
+    for (size_t start = 1; start <= path.size();) {
+        auto end = path.find('/', start);
+        if (end == std::string::npos) end = path.size();
+        std::string segment;
+        for (auto index = start; index < end; ++index) {
+            unsigned char ch = static_cast<unsigned char>(path[index]);
+            if (ch == '%') {
+                if (index + 2 >= end || hex(path[index + 1]) < 0 || hex(path[index + 2]) < 0) {
+                    throw std::runtime_error("Invalid raw resource encoding");
+                }
+                ch = static_cast<unsigned char>((hex(path[index + 1]) << 4) | hex(path[index + 2]));
+                index += 2;
+            }
+            if (ch <= 32 || ch == '/' || ch == '\\') throw std::runtime_error("Invalid raw resource segment");
+            segment.push_back(static_cast<char>(ch));
+        }
+        if (segment == "." || segment == "..") throw std::runtime_error("Invalid raw resource segment");
+        if (end == path.size()) break;
+        start = end + 1;
+    }
+    if (body.size() > 20000000) throw std::runtime_error("Raw resource request exceeds capacity");
+    const auto base = parseHttpUrl(origin);
+    const auto response = httpGet("http://" + base.authority + route, 1000000, write ? "POST" : "GET", body);
+    if (response.status < 200 || response.status >= 300) {
+        throw std::runtime_error(service + " returned HTTP " + std::to_string(response.status) + " for " + route);
+    }
+    validateUtf8(response.body);
+    return response.body;
 }
 
 std::string urlEncode(const std::string& value) {
@@ -2503,14 +2762,475 @@ HttpResponse hostedCacheSnapshot(const JsonValue& programMap, const std::string&
 
 } // namespace
 
+struct SchedulerState {
+    struct RuntimeProgram {
+        Program program;
+        JsonValue programMap;
+        std::string id;
+        uint64_t refreshMs = 1000;
+        std::chrono::steady_clock::time_point nextPoll{};
+    };
+    struct Slot {
+        std::string descriptor;
+        std::string kind;
+        bool active = false;
+        std::vector<RuntimeProgram> services;
+        std::vector<RuntimeProgram> daemons;
+    };
+
+    std::mutex mutex;
+    bool busy = false;
+    std::string ffsRoot;
+    std::string signingKey;
+    std::string signingKeyId;
+    std::map<std::string, StorageRootGrant> roots;
+    std::map<int, Slot> slots;
+    std::map<std::string, std::string> blobs;
+    Program policyProgram;
+    JsonValue policyMap;
+    std::string error;
+    std::string responseBody;
+    int responseStatus = 200;
+    bool hasResponse = false;
+};
+
+namespace {
+
+std::string valueText(const PValue& value, const char* label) {
+    const auto* text = std::get_if<std::string>(&value.value);
+    if (!text) throw std::runtime_error(std::string("Expected string scheduler argument: ") + label);
+    return *text;
+}
+
+int64_t valueInteger(const PValue& value, const char* label) {
+    const auto* integer = std::get_if<int64_t>(&value.value);
+    if (!integer) throw std::runtime_error(std::string("Expected integer scheduler argument: ") + label);
+    return *integer;
+}
+
+std::string schedulerArtifactPath(const std::string& manifestPath) {
+    static const std::string prefix = "/pmachine/programs/";
+    static const std::string suffix = "/manifest.json";
+    if (manifestPath.rfind(prefix, 0) != 0 || manifestPath.size() > 256 ||
+        manifestPath.size() < prefix.size() + 1 + suffix.size() ||
+        manifestPath.compare(manifestPath.size() - suffix.size(), suffix.size(), suffix) != 0) {
+        throw HttpError(400, "Manifest path must be under /pmachine/programs");
+    }
+    const std::string name = manifestPath.substr(prefix.size(),
+        manifestPath.size() - prefix.size() - suffix.size());
+    if (!std::regex_match(name, std::regex("[A-Za-z0-9][A-Za-z0-9_-]{0,63}"))) {
+        throw HttpError(400, "Invalid program bundle name");
+    }
+    return "programs/" + name + "/manifest.json";
+}
+
+std::string schedulerBundleName(const std::string& manifestPath) {
+    const std::string relative = schedulerArtifactPath(manifestPath);
+    return relative.substr(std::string("programs/").size(),
+        relative.size() - std::string("programs/").size() - std::string("/manifest.json").size());
+}
+
+std::string readSchedulerText(const SchedulerState& state, const std::string& relative) {
+    try {
+        return readStorageText(state.roots, 8 * 1024 * 1024, "pmachine", relative, false);
+    } catch (const HttpError& error) {
+        if (error.status() == 500) throw HttpError(503, error.what());
+        throw;
+    }
+}
+
+void verifyPcodeSignature(const std::string& pcode, const JsonValue& map,
+    const std::string& key, const std::string& keyId) {
+    const auto& root = asObject(map, "program map");
+    const auto& signing = asObject(property(root, "signing"), "program map signing block");
+    if (asString(property(signing, "algorithm"), "signing.algorithm") != "hmac-sha256")
+        throw HttpError(400, "Unsupported program signing algorithm");
+    if (asString(property(signing, "keyId"), "signing.keyId") != keyId)
+        throw HttpError(403, "Program signing key id mismatch");
+    const std::string signature = asString(property(signing, "signature"), "signing.signature");
+    const std::string expected = hmacSha256Hex(key, pcode);
+    if (signature.size() != expected.size() || !constantTimeEqual(signature, expected))
+        throw HttpError(403, "Program P-code signature verification failed");
+    const auto* canonicalForm = optionalProperty(signing, "canonicalForm");
+    if (canonicalForm && asString(*canonicalForm, "signing.canonicalForm") != "raw-pcode-text-v1")
+        throw HttpError(400, "Unsupported program signing canonical form");
+}
+
+void verifyEntryDigest(const std::string& pcode, const std::string& expected) {
+    if (expected.empty()) return;
+    if (expected.size() != 64 || expected.find_first_not_of("0123456789abcdef") != std::string::npos ||
+        !constantTimeEqual(sha256(pcode), expected)) {
+        throw HttpError(400, "Bundle entry SHA-256 digest mismatch");
+    }
+}
+
+uint64_t runtimeRefreshMs(const JsonValue& map) {
+    const auto& root = asObject(map, "program map");
+    const auto& runtime = asObject(property(root, "runtimeUnit"), "runtimeUnit");
+    const auto* refresh = optionalProperty(runtime, "refreshMs");
+    if (!refresh) return 1000;
+    const int64_t value = safeInteger(*refresh, "runtimeUnit.refreshMs");
+    if (value < 10 || value > 300000) throw HttpError(400, "Invalid daemon interval");
+    return static_cast<uint64_t>(value);
+}
+
+std::string runtimeId(const JsonValue& map) {
+    const auto& root = asObject(map, "program map");
+    return asString(property(asObject(property(root, "runtimeUnit"), "runtimeUnit"), "id"),
+        "runtimeUnit.id");
+}
+
+void validateSchedulerMap(const Program& program, const JsonValue& map) {
+    const auto& root = asObject(map, "scheduler program map");
+    const auto& globals = requireArray(property(root, "globals"));
+    if (!globals.empty()) throw std::runtime_error("Scheduler map unexpectedly declares globals");
+    const auto& procedures = asObject(property(root, "procedures"), "scheduler procedures");
+    size_t procedureCount = 0;
+    for (const auto& entry : procedures) {
+        const auto& definition = asObject(entry.second, "scheduler procedure");
+        const std::string label = asString(property(definition, "label"), "scheduler procedure label");
+        if (label != entry.first || program.labels.find(label) == program.labels.end())
+            throw std::runtime_error("Scheduler P-code and program map labels do not match");
+        (void)requireArray(property(definition, "params"));
+        ++procedureCount;
+    }
+    size_t codeProcedures = 0;
+    for (const auto& label : program.labels) {
+        if (label.first.rfind("CS_METHOD_", 0) == 0) ++codeProcedures;
+    }
+    if (procedureCount != 9 || codeProcedures != procedureCount ||
+        program.labels.find("MAIN") == program.labels.end()) {
+        throw std::runtime_error("Invalid embedded scheduler program map");
+    }
+}
+
+SchedulerState::RuntimeProgram loadSchedulerProgram(const SchedulerState& state,
+    const std::string& storagePath, const std::string& entryName, const std::string& mapName,
+    const std::string& expectedKind, const std::string& expectedDigest,
+    const std::map<std::string, StorageRootGrant>& applicationStorageRoots,
+    bool canReadArtifacts, bool canPublish) {
+    const auto safeEntry = storagePathParts(entryName);
+    const auto safeMap = storagePathParts(mapName);
+    std::string entryRelative = storagePath;
+    if (entryRelative.empty() || entryRelative.front() != '/' ||
+        entryRelative.rfind("/pmachine/programs/", 0) != 0) {
+        throw HttpError(400, "Invalid bundle storagePath");
+    }
+    const auto slash = entryRelative.find('/', std::string("/pmachine/programs/").size());
+    const auto versionStart = entryRelative.rfind("/versions/");
+    if (slash == std::string::npos || versionStart == std::string::npos ||
+        versionStart < slash || entryRelative.find("..") != std::string::npos ||
+        !std::regex_match(entryRelative.substr(versionStart + 10), std::regex("v[0-9]+"))) {
+        throw HttpError(400, "Invalid bundle storagePath");
+    }
+    entryRelative.erase(0, std::string("/pmachine/").size());
+    const std::string name = entryRelative.substr(std::string("programs/").size(),
+        entryRelative.find("/versions/") - std::string("programs/").size());
+    if (!std::regex_match(name, std::regex("[A-Za-z0-9][A-Za-z0-9_-]{0,63}")))
+        throw HttpError(400, "Bundle storagePath does not match the program name");
+    std::string relativeEntry = entryRelative + "/";
+    std::string relativeMap = relativeEntry;
+    for (size_t index = 0; index < safeEntry.size(); ++index) {
+        if (index) relativeEntry += '/';
+        relativeEntry += safeEntry[index];
+    }
+    for (size_t index = 0; index < safeMap.size(); ++index) {
+        if (index) relativeMap += '/';
+        relativeMap += safeMap[index];
+    }
+    const std::string pcode = readSchedulerText(state, relativeEntry);
+    verifyEntryDigest(pcode, expectedDigest);
+    const std::string mapText = readSchedulerText(state, relativeMap);
+    const JsonValue programMap = JsonParser(mapText).parse();
+    verifyPcodeSignature(pcode, programMap, state.signingKey, state.signingKeyId);
+    Program program = parseProgram(pcode);
+    std::string ignoredId;
+    validateMap(programMap, ignoredId, program, !applicationStorageRoots.empty(),
+        std::any_of(applicationStorageRoots.begin(), applicationStorageRoots.end(),
+            [](const auto& grant) { return !grant.second.readOnly; }),
+        canReadArtifacts, canPublish, expectedKind);
+    return SchedulerState::RuntimeProgram{std::move(program), programMap,
+        runtimeId(programMap), expectedKind == "daemon" ? runtimeRefreshMs(programMap) : 1000, {}};
+}
+
+std::string ensureStoragePrefix(const std::string& storagePath, const std::string& name) {
+    if (storagePath != "/pmachine/programs/" + name + "/versions/v1") {
+        throw HttpError(400, "Bundle storagePath must identify version v1");
+    }
+    return storagePath;
+}
+
+HttpResponse runSchedulerPolicy(SchedulerState& scheduler, const std::string& operation,
+    const std::string& request, uint64_t maxSteps,
+    const std::map<std::string, StorageRootGrant>& applicationStorageRoots,
+    uint64_t maxFileBytes, bool canReadArtifacts, bool canPublish) {
+    scheduler.error.clear();
+    scheduler.responseBody.clear();
+    scheduler.responseStatus = 200;
+    scheduler.hasResponse = false;
+    const HttpRequest event{"POST", "/api/pmachine/scheduler", request, "127.0.0.1", 0, {}};
+    const InternalHostBinding binding = [&](const std::string& name, const std::vector<PValue>& args) -> PValue {
+        auto expect = [&](size_t count) {
+            if (args.size() != count) throw std::runtime_error("Invalid scheduler binding arity");
+        };
+        auto checked = [&](auto action, int successValue) -> PValue {
+            try {
+                action();
+                return PValue{static_cast<int64_t>(successValue)};
+            } catch (const std::exception& error) {
+                scheduler.error = error.what();
+                const auto* httpError = dynamic_cast<const HttpError*>(&error);
+                const int fallback = name == "host.scheduler_stage" ? 400 :
+                    name == "host.scheduler_commit" ? 503 : 500;
+                return PValue{static_cast<int64_t>(successValue == 1 ? 0 :
+                    (httpError ? httpError->status() : fallback))};
+            }
+        };
+        if (name == "host.scheduler_operation") { expect(0); return PValue{operation}; }
+        if (name == "host.scheduler_request") { expect(0); return PValue{request}; }
+        if (name == "host.scheduler_read") {
+            expect(1);
+            return PValue{readSchedulerText(scheduler, schedulerArtifactPath(valueText(args[0], "manifestPath")))};
+        }
+        if (name == "host.scheduler_slot") {
+            expect(1);
+            const auto slot = valueInteger(args[0], "slot");
+            const auto found = scheduler.slots.find(static_cast<int>(slot));
+            return PValue{found == scheduler.slots.end() ? std::string("{}") : found->second.descriptor};
+        }
+        if (name == "host.scheduler_saved_state") {
+            expect(0);
+            const std::string relative = ".pmachine-scheduler/slots.json";
+            try {
+                return PValue{readSchedulerText(scheduler, relative)};
+            } catch (const HttpError& error) {
+                if (error.status() == 404) return PValue{std::string("{\"version\":1,\"slots\":[]}")};
+                throw;
+            }
+        }
+        if (name == "host.scheduler_stage") {
+            expect(2);
+            return checked([&]() {
+                const auto slot = valueInteger(args[0], "slot");
+                if (slot < 1 || slot > 16) throw HttpError(400, "Slot must be between 1 and 16");
+                if (scheduler.slots.count(static_cast<int>(slot))) throw HttpError(409, "Slot is already staged");
+                const std::string descriptorText = valueText(args[1], "descriptor");
+                const JsonValue descriptorValue = JsonParser(descriptorText).parse();
+                const auto& descriptor = asObject(descriptorValue, "slot descriptor");
+                const std::string manifestPath = asString(property(descriptor, "manifestPath"), "manifestPath");
+                const std::string manifestText = readSchedulerText(scheduler, schedulerArtifactPath(manifestPath));
+                const JsonValue manifestValue = JsonParser(manifestText).parse();
+                const auto& manifest = asObject(manifestValue, "bundle manifest");
+                const std::string kind = asString(property(descriptor, "kind"), "descriptor.kind");
+                if (asString(property(manifest, "type"), "manifest.type") != kind ||
+                    (kind != "service" && kind != "daemon" && kind != "transient")) {
+                    throw HttpError(400, "Manifest kind does not match the scheduler descriptor");
+                }
+                const std::string bundleName = schedulerBundleName(manifestPath);
+                const std::string storagePath = ensureStoragePrefix(
+                    asString(property(manifest, "storagePath"), "manifest.storagePath"), bundleName);
+                const std::string entry = asString(property(manifest, "entry"), "manifest.entry");
+                const std::string mapName = asString(property(manifest, "programMap"), "manifest.programMap");
+                const std::string digest = asString(property(manifest, "sha256"), "manifest.sha256");
+                verifyEntryDigest(readSchedulerText(scheduler, storagePath.substr(10) + "/" + entry), digest);
+                SchedulerState::Slot staged;
+                staged.descriptor = descriptorText;
+                staged.kind = kind;
+                if (kind == "service" || kind == "transient") {
+                    staged.services.push_back(loadSchedulerProgram(scheduler, storagePath, entry, mapName,
+                        kind == "transient" ? "program" : "service", digest,
+                        applicationStorageRoots, canReadArtifacts, canPublish));
+                } else {
+                    const auto* serviceEntryValue = optionalProperty(manifest, "serviceEntry");
+                    const auto* serviceMapValue = optionalProperty(manifest, "serviceProgramMap");
+                    if (serviceEntryValue || serviceMapValue) {
+                        if (!serviceEntryValue || !serviceMapValue)
+                            throw HttpError(400, "Daemon service entry and map must be supplied together");
+                        staged.services.push_back(loadSchedulerProgram(scheduler, storagePath,
+                            asString(*serviceEntryValue, "serviceEntry"),
+                            asString(*serviceMapValue, "serviceProgramMap"), "service", "",
+                            applicationStorageRoots, canReadArtifacts, canPublish));
+                    }
+                    const auto* daemonsValue = optionalProperty(manifest, "daemons");
+                    if (daemonsValue) {
+                        const auto& definitions = requireArray(*daemonsValue);
+                        if (definitions.empty() || definitions.size() > 16)
+                            throw HttpError(400, "Daemon list must contain 1..16 entries");
+                        for (const auto& value : definitions) {
+                            const auto& definition = asObject(value, "daemon definition");
+                            staged.daemons.push_back(loadSchedulerProgram(scheduler, storagePath,
+                                asString(property(definition, "entry"), "daemon.entry"),
+                                asString(property(definition, "programMap"), "daemon.programMap"), "daemon",
+                                asString(property(definition, "sha256"), "daemon.sha256"),
+                                applicationStorageRoots, canReadArtifacts, canPublish));
+                        }
+                    } else {
+                        staged.daemons.push_back(loadSchedulerProgram(scheduler, storagePath, entry, mapName,
+                            "daemon", digest, applicationStorageRoots, canReadArtifacts, canPublish));
+                    }
+                    if (staged.services.empty() && staged.daemons.empty())
+                        throw HttpError(400, "Daemon bundle contains no executable program");
+                }
+                scheduler.slots.emplace(static_cast<int>(slot), std::move(staged));
+            }, 200);
+        }
+        if (name == "host.scheduler_activate") {
+            expect(1);
+            return checked([&]() {
+                const auto slot = valueInteger(args[0], "slot");
+                auto found = scheduler.slots.find(static_cast<int>(slot));
+                if (found == scheduler.slots.end()) throw HttpError(404, "Slot is not staged");
+                auto& staged = found->second;
+                if (staged.kind == "transient") {
+                    for (auto& service : staged.services) {
+                        const auto result = execute(service.program,
+                            HttpRequest{"POST", "/transient/" + service.id, "{}", "127.0.0.1", 0, {}},
+                            maxSteps, applicationStorageRoots, maxFileBytes, service.programMap, scheduler.blobs,
+                            {}, {}, nullptr, nullptr, {}, nullptr, nullptr, 0);
+                        if (result.status >= 400) throw HttpError(result.status, "Transient execution failed");
+                    }
+                    return;
+                }
+                staged.active = true;
+                const auto now = std::chrono::steady_clock::now();
+                for (auto& daemon : staged.daemons) {
+                    const auto result = execute(daemon.program,
+                        HttpRequest{"POST", "/daemon/" + daemon.id, "{}", "127.0.0.1", 0, {}},
+                        maxSteps, applicationStorageRoots, maxFileBytes, daemon.programMap, scheduler.blobs,
+                        {}, {}, nullptr, nullptr, {}, nullptr, nullptr, 0);
+                    if (result.status >= 400) throw HttpError(result.status, "Daemon activation failed");
+                    daemon.nextPoll = now + std::chrono::milliseconds(daemon.refreshMs);
+                }
+            }, 200);
+        }
+        if (name == "host.scheduler_remove") {
+            expect(1);
+            return checked([&]() {
+                const auto slot = valueInteger(args[0], "slot");
+                if (slot < 1 || slot > 16) throw HttpError(400, "Slot must be between 1 and 16");
+                scheduler.slots.erase(static_cast<int>(slot));
+            }, 200);
+        }
+        if (name == "host.scheduler_commit") {
+            expect(1);
+            return checked([&]() {
+                const std::string relative = ".pmachine-scheduler/slots.json";
+                const auto directory = resolveStoragePath(scheduler.roots, "pmachine",
+                    ".pmachine-scheduler", true, true);
+                if (!directory.exists) {
+                    std::error_code error;
+                    if (!std::filesystem::create_directory(directory.path, error) && error)
+                        throw HttpError(500, "Unable to create scheduler state directory");
+                    const auto status = std::filesystem::symlink_status(directory.path, error);
+                    if (error || std::filesystem::is_symlink(status) || !std::filesystem::is_directory(status))
+                        throw HttpError(403, "Invalid scheduler state directory");
+                }
+                writeStorageText(scheduler.roots, 8 * 1024 * 1024, "pmachine", relative,
+                    valueText(args[0], "saved state"));
+            }, 1);
+        }
+        if (name == "host.scheduler_error") { expect(0); return PValue{scheduler.error}; }
+        if (name == "host.scheduler_respond") {
+            expect(2);
+            if (scheduler.hasResponse) throw std::runtime_error("Scheduler responded more than once");
+            const int64_t status = valueInteger(args[0], "response status");
+            if (status < 200 || status > 599) throw std::runtime_error("Invalid scheduler response status");
+            scheduler.responseStatus = static_cast<int>(status);
+            scheduler.responseBody = valueText(args[1], "response body");
+            (void)JsonParser(scheduler.responseBody).parse();
+            scheduler.hasResponse = true;
+            return PValue{int64_t{1}};
+        }
+        throw std::runtime_error("Unknown internal scheduler binding");
+    };
+    std::map<std::string, std::string> blobs;
+    (void)execute(scheduler.policyProgram, event, maxSteps, {}, maxFileBytes,
+        scheduler.policyMap, blobs, {}, {}, nullptr, nullptr, {}, nullptr, &binding);
+    if (!scheduler.hasResponse) throw HttpError(500, "Scheduler policy did not return a response");
+    return HttpResponse{scheduler.responseStatus, std::move(scheduler.responseBody)};
+}
+
+std::optional<size_t> matchingEndpoint(const SchedulerState::RuntimeProgram& program,
+    const HttpRequest& request) {
+    const auto& root = asObject(program.programMap, "program map");
+    const auto* endpointsValue = optionalProperty(root, "serviceEndpoints");
+    if (!endpointsValue) return std::nullopt;
+    for (const auto& item : requireArray(*endpointsValue)) {
+        const auto& endpoint = asObject(item, "service endpoint");
+        if (asString(property(endpoint, "verb"), "service endpoint verb") != request.method ||
+            asString(property(endpoint, "path"), "service endpoint path") != request.path) continue;
+        std::string label;
+        if (const auto* entry = optionalProperty(endpoint, "entryLabel"))
+            label = asString(*entry, "service endpoint entryLabel");
+        else if (const auto* handler = optionalProperty(endpoint, "handler"))
+            label = asString(*handler, "service endpoint handler");
+        if (label.empty()) return size_t{0};
+        const auto found = program.program.labels.find(label);
+        if (found == program.program.labels.end())
+            throw HttpError(503, "Service endpoint label is missing from P-code");
+        return found->second;
+    }
+    return std::nullopt;
+}
+
+} // namespace
+
+std::string imageContentHash(const image::Image& image) {
+    return sha256(image::canonicalBytes(image));
+}
+
+std::unique_ptr<image::Context> createImageContext(image::Limits limits) {
+    return std::make_unique<image::Context>(sha256, image::validateScalarInstruction, limits);
+}
+
+namespace {
+image::Scalar executeImageCall(image::Context::Call call, const std::vector<image::Scalar>& args,
+    uint64_t maxSteps) {
+    image::require(maxSteps > 0 && maxSteps <= 200000, "Invalid image step limit");
+    for (const auto& value : args) {
+        if (const auto* integer = std::get_if<int64_t>(&value))
+            image::require(*integer >= INT32_MIN && *integer <= INT32_MAX, "Invalid image scalar argument");
+    }
+    Program program;
+    for (const auto& record : call.image().instructions) {
+        Instruction instruction;
+        instruction.op = record.op;
+        instruction.operand = record.operand;
+        instruction.decodedString = true;
+        instruction.target = record.target;
+        instruction.argumentCount = static_cast<int>(record.argCount);
+        program.instructions.push_back(std::move(instruction));
+    }
+    ImageInvocation invocation{call, args};
+    std::map<std::string, std::string> blobs;
+    (void)execute(program, {}, maxSteps, {}, 0, JsonValue{JsonValue::Object{}}, blobs, {}, {},
+        nullptr, nullptr, {}, &invocation);
+    return invocation.result;
+}
+}
+
+image::Scalar callImage(image::Context& context, uint32_t slot,
+    const std::vector<image::Scalar>& args, uint64_t maxSteps) {
+    image::require(args.size() <= UINT32_MAX, "Image argument overflow");
+    return executeImageCall(context.acquire(slot, static_cast<uint32_t>(args.size())), args, maxSteps);
+}
+
+image::Scalar callStagedImage(image::Context& context, image::Context::Handle handle,
+    uint32_t entry, const std::vector<image::Scalar>& args, uint64_t maxSteps) {
+    image::require(args.size() <= UINT32_MAX, "Image argument overflow");
+    return executeImageCall(context.acquireStaged(handle, entry, static_cast<uint32_t>(args.size())), args, maxSteps);
+}
+
 NativeService::NativeService(std::string pcodeText, std::string programMapJson, uint64_t maxSteps,
-    std::map<std::string, StorageRootGrant> storageRoots, uint64_t maxFileBytes, std::string aggregatorUrl)
+    std::map<std::string, StorageRootGrant> storageRoots, uint64_t maxFileBytes, std::string aggregatorUrl,
+    std::string librarianUrl, std::string ffsRoot, std::string signingKey, std::string signingKeyId)
     : pcodeText_(std::move(pcodeText)),
       programMapJson_(std::move(programMapJson)),
       maxSteps_(maxSteps),
       storageRoots_(std::move(storageRoots)),
       maxFileBytes_(maxFileBytes),
-      aggregatorUrl_(std::move(aggregatorUrl)) {
+      aggregatorUrl_(std::move(aggregatorUrl)),
+      librarianUrl_(std::move(librarianUrl)) {
     if (maxFileBytes_ == 0 || maxFileBytes_ > 1000000) {
         throw std::runtime_error("Storage file capacity must be between 1 and 1000000 bytes");
     }
@@ -2536,12 +3256,60 @@ NativeService::NativeService(std::string pcodeText, std::string programMapJson, 
         canWriteStorage = canWriteStorage || !grant.readOnly;
     }
     const auto program = parseProgram(pcodeText_);
-    validateMap(JsonParser(programMapJson_).parse(), serviceId_, program, !storageRoots_.empty(), canWriteStorage);
+    validateMap(JsonParser(programMapJson_).parse(), serviceId_, program, !storageRoots_.empty(), canWriteStorage,
+        artifactReadEnabled(), brokerPublishEnabled());
     if (!aggregatorUrl_.empty()) (void)parseHttpUrl(aggregatorUrl_);
+    if (!librarianUrl_.empty()) (void)parseHttpUrl(librarianUrl_);
+    if (!ffsRoot.empty()) {
+        const std::filesystem::path root(ffsRoot);
+        if (!root.is_absolute()) throw std::runtime_error("--ffs-root must be an absolute directory");
+        std::error_code error;
+        const auto status = std::filesystem::symlink_status(root, error);
+        if (error || std::filesystem::is_symlink(status) || !std::filesystem::is_directory(status))
+            throw std::runtime_error("--ffs-root must be a real directory");
+        const auto canonical = std::filesystem::canonical(root, error);
+        if (error) throw std::runtime_error("Unable to resolve --ffs-root");
+        scheduler_ = std::make_shared<SchedulerState>();
+        scheduler_->ffsRoot = canonical.string();
+        scheduler_->signingKey = signingKey.empty() ? "dev-insecure-key-change-me" : std::move(signingKey);
+        scheduler_->signingKeyId = signingKeyId.empty() ? "profile-default" : std::move(signingKeyId);
+        scheduler_->roots.emplace("pmachine", StorageRootGrant{scheduler_->ffsRoot, false});
+        scheduler_->policyProgram = parseProgram(pmachine::SLOT_SCHEDULER_PCODE);
+        scheduler_->policyMap = JsonParser(pmachine::SLOT_SCHEDULER_MAP).parse();
+        validateSchedulerMap(scheduler_->policyProgram, scheduler_->policyMap);
+    }
     bootId_ = serviceId_ + "-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
 }
 
+NativeService::~NativeService() = default;
+
 HttpResponse NativeService::dispatch(const HttpRequest& request) const {
+    if (request.path == "/api/pmachine/scheduler" ||
+        request.path == "/api/pmachine/scheduler/load" ||
+        request.path == "/api/pmachine/scheduler/unload") {
+        if (!scheduler_) return HttpResponse{503, "{\"version\":1,\"error\":\"Native scheduler requires --ffs-root\"}"};
+        std::string operation;
+        if (request.path == "/api/pmachine/scheduler" && request.method == "GET") operation = "status";
+        else if (request.path == "/api/pmachine/scheduler/load" && request.method == "POST") operation = "load";
+        else if (request.path == "/api/pmachine/scheduler/unload" && request.method == "POST") operation = "unload";
+        else return HttpResponse{405, "{\"version\":1,\"error\":\"Method not allowed\"}"};
+        std::unique_lock<std::mutex> lock(scheduler_->mutex, std::try_to_lock);
+        if (!lock.owns_lock()) return HttpResponse{409, "{\"version\":1,\"error\":\"Slot scheduler is busy\"}"};
+        scheduler_->busy = true;
+        struct ClearBusy {
+            SchedulerState& state;
+            ~ClearBusy() { state.busy = false; }
+        } clear{*scheduler_};
+        try {
+            return runSchedulerPolicy(*scheduler_, operation, request.body, maxSteps_ ? maxSteps_ : 200000,
+                storageRoots_, maxFileBytes_, artifactReadEnabled(), brokerPublishEnabled());
+        } catch (const HttpError& error) {
+            return HttpResponse{error.status(), "{\"version\":1,\"error\":" + jsonQuote(error.what()) + "}"};
+        } catch (const std::exception& error) {
+            const int status = operation == "load" || operation == "unload" ? 400 : 500;
+            return HttpResponse{status, "{\"version\":1,\"error\":" + jsonQuote(error.what()) + "}"};
+        }
+    }
     constexpr const char* cachePrefix = "/api/hosted/caches/";
     constexpr const char* cacheSuffix = "/snapshot";
     if (request.method == "GET" && request.path.rfind(cachePrefix, 0) == 0
@@ -2555,8 +3323,77 @@ HttpResponse NativeService::dispatch(const HttpRequest& request) const {
         return hostedCacheSnapshot(JsonParser(programMapJson_).parse(), serviceId_, bootId_,
             aggregatorUrl_, cacheName, request.query);
     }
+    if (scheduler_ && (request.method == "GET" || request.method == "POST" || request.method == "PUT" ||
+        request.method == "DELETE" || request.method == "PATCH")) {
+        std::lock_guard<std::mutex> lock(scheduler_->mutex);
+        const SchedulerState::RuntimeProgram* selected = nullptr;
+        size_t selectedEntry = 0;
+        for (const auto& slot : scheduler_->slots) {
+            if (!slot.second.active) continue;
+            for (const auto& service : slot.second.services) {
+                const auto entry = matchingEndpoint(service, request);
+                if (!entry) continue;
+                if (selected) throw HttpError(409, "Multiple scheduled services claim this endpoint");
+                selected = &service;
+                selectedEntry = *entry;
+            }
+        }
+        if (selected) {
+            return execute(selected->program, request, maxSteps_, storageRoots_, maxFileBytes_,
+                selected->programMap, scheduler_->blobs, librarianUrl_, aggregatorUrl_, nullptr, nullptr, {},
+                nullptr, nullptr, selectedEntry);
+        }
+    }
     const auto parsed = parseProgram(pcodeText_);
-    return execute(parsed, request, maxSteps_, storageRoots_, maxFileBytes_, JsonParser(programMapJson_).parse());
+    return execute(parsed, request, maxSteps_, storageRoots_, maxFileBytes_, JsonParser(programMapJson_).parse(),
+        blobs_, librarianUrl_, aggregatorUrl_);
+}
+
+void NativeService::restoreScheduler() {
+    if (!scheduler_) return;
+    std::lock_guard<std::mutex> lock(scheduler_->mutex);
+    scheduler_->busy = true;
+    try {
+        const auto response = runSchedulerPolicy(*scheduler_, "restore", "{}", maxSteps_ ? maxSteps_ : 200000,
+            storageRoots_, maxFileBytes_, artifactReadEnabled(), brokerPublishEnabled());
+        scheduler_->busy = false;
+        if (response.status < 200 || response.status >= 300) {
+            throw std::runtime_error("Native slot scheduler restore failed: " + response.jsonBody);
+        }
+    } catch (...) {
+        scheduler_->busy = false;
+        try {
+            throw;
+        } catch (const std::exception& error) {
+            throw HttpError(503, std::string("Native slot scheduler restore failed: ") + error.what());
+        } catch (...) {
+            throw HttpError(503, "Native slot scheduler restore failed");
+        }
+    }
+}
+
+void NativeService::pollScheduler() {
+    if (!scheduler_) return;
+    std::unique_lock<std::mutex> lock(scheduler_->mutex, std::try_to_lock);
+    if (!lock.owns_lock()) return;
+    const auto now = std::chrono::steady_clock::now();
+    for (auto& slot : scheduler_->slots) {
+        if (!slot.second.active) continue;
+        for (auto& daemon : slot.second.daemons) {
+            if (daemon.nextPoll > now) continue;
+            daemon.nextPoll = now + std::chrono::milliseconds(daemon.refreshMs);
+            try {
+                const auto response = execute(daemon.program,
+                    HttpRequest{"POST", "/daemon/" + daemon.id, "{}", "127.0.0.1", 0, {}},
+                    maxSteps_, storageRoots_, maxFileBytes_, daemon.programMap, scheduler_->blobs,
+                    {}, {}, nullptr, nullptr, {}, nullptr, nullptr, 0);
+                if (response.status >= 400) scheduler_->error = "Daemon execution returned HTTP " +
+                    std::to_string(response.status);
+            } catch (const std::exception& error) {
+                scheduler_->error = error.what();
+            }
+        }
+    }
 }
 
 HttpResponse NativeService::debugDispatch(std::istream& input, std::ostream& output) const {
@@ -2580,7 +3417,8 @@ HttpResponse NativeService::debugDispatch(std::istream& input, std::ostream& out
     }
     const auto program = parseProgram(pcodeText_);
     return execute(program, request, maxSteps_, storageRoots_, maxFileBytes_,
-        JsonParser(programMapJson_).parse(), &input, &output, readBreakpoints(command));
+        JsonParser(programMapJson_).parse(), blobs_, librarianUrl_, aggregatorUrl_,
+        &input, &output, readBreakpoints(command));
 }
 
 const std::string& NativeService::serviceId() const {
@@ -2595,6 +3433,14 @@ bool NativeService::filesystemWriteEnabled() const {
     return std::any_of(storageRoots_.begin(), storageRoots_.end(), [](const auto& entry) {
         return !entry.second.readOnly;
     });
+}
+
+bool NativeService::artifactReadEnabled() const {
+    return !librarianUrl_.empty();
+}
+
+bool NativeService::brokerPublishEnabled() const {
+    return !aggregatorUrl_.empty();
 }
 
 std::string readFile(const std::string& path) {

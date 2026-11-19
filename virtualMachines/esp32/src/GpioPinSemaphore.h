@@ -13,9 +13,10 @@ public:
     GpioPinSemaphore(const GpioPinSemaphore&) = delete;
     GpioPinSemaphore& operator=(const GpioPinSemaphore&) = delete;
 
+    bool ready() const;
     bool acquired() const;
 
 private:
-    int pin_;
+    bool ready_;
     bool acquired_;
 };

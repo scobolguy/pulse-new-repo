@@ -10,12 +10,12 @@ fun main() {
         val item = jsonArrayGet(discovered, index)
         val address = jsonText(item, "address")
         val protocol = jsonText(item, "protocol")
-        val port = jsonText(item, "port")
+        val port = jsonInteger(item, "port").toString()
         val serviceUrl = jsonText(item, "serviceUrl")
         if (address != "" && protocol == "onvif" && serviceUrl != "") {
             val cacheKey = "camera:" + protocol + ":" + address + ":" + port
             if (cacheCount("cameras") < 50 || cacheGet("cameras", cacheKey) != "") {
-                var camera = jsonSetText("{}", "name", address)
+                var camera = jsonSetText("{}", "name", "ONVIF camera " + address)
                 camera = jsonSetText(camera, "protocol", protocol)
                 camera = jsonSetText(camera, "address", address)
                 camera = jsonSetText(camera, "port", port)

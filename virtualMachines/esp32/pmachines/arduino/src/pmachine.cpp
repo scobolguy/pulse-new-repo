@@ -91,6 +91,18 @@ namespace {
         std::free(allocation);
     }
 
+    void* allocateProgramChunk(size_t bytes, bool& psram) {
+#if defined(ESP32) && !defined(PLATFORM_RPIB)
+        void* allocation = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        psram = allocation != nullptr;
+        return allocation ? allocation
+            : heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+#else
+        psram = false;
+        return std::malloc(bytes);
+#endif
+    }
+
     std::string normalizeVariableName(const std::string& name) {
         const size_t first = name.find_first_not_of(" \t\r\n");
         if (first == std::string::npos) return "";
@@ -750,7 +762,13 @@ std::string PMachine::getImageMemoryMapJson() const {
     doc["numPages"] = numPages;
     doc["pageSizeBytes"] = static_cast<uint32_t>(pagingConfig.pageSizeBytes);
     doc["maxFrames"] = static_cast<uint32_t>(pagingConfig.maxFrames);
-    doc["programImageBytes"] = static_cast<uint32_t>(programImage.size());
+    doc["programImageBytes"] = static_cast<uint32_t>(programImageSize());
+    doc["programImageStorage"] = managedProgramImage ? "managed-chunks" : "contiguous";
+    if (managedProgramImage) {
+        doc["programImageChunkCount"] = managedProgramImage->chunkCount();
+        doc["programImageInternalBytes"] = managedProgramImage->allocatedInternalBytes();
+        doc["programImagePsramBytes"] = managedProgramImage->allocatedPsramBytes();
+    }
 
     JsonObject pagingStatsObj = doc["pagingStats"].to<JsonObject>();
     pagingStatsObj["pageFaults"] = pagingStats.pageFaults;
@@ -980,6 +998,8 @@ bool PMachine::unloadUnit() {
     pcodeMap.clear();
     memoryMap.clear();
     decltype(programImage)().swap(programImage);
+    managedProgramImage.reset();
+    programLoadError = nullptr;
     decltype(pageTable)().swap(pageTable);
     decltype(frames)().swap(frames);
     namedStringVariables.clear();
@@ -1005,10 +1025,42 @@ void PMachine::tickDaemonRefresh(uint32_t nowMs) {
     }
 }
 
-bool PMachine::loadProgram(std::vector<uint8_t> pcode, const std::string& file, size_t maxBytes) {
+bool PMachine::loadProgram(std::vector<uint8_t> pcode, const std::string& file, size_t maxBytes,
+                           bool transient) {
+    programLoadError = nullptr;
+    const bool pinned = std::any_of(residentAssets.begin(), residentAssets.end(),
+        [](const ResidentAssetRecord& asset) {
+            return asset.domain == ResidentDomain::ProgramImage && asset.resident && asset.pinCount > 0;
+        });
+    std::unique_ptr<ManagedProgramBuffer> replacement;
+    if (transient && runtimeUnit.kind == RuntimeUnitKind::Program && !runtimeUnit.resident && !pinned
+            && !pcode.empty()) {
+        replacement.reset(new (std::nothrow) ManagedProgramBuffer(allocateProgramChunk, freeRam));
+        if (!replacement || !replacement->assign(pcode.data(), pcode.size())) {
+            programLoadError = "Unable to allocate managed program image";
+            return false;
+        }
+    }
     pcodeMap.clear();
     memoryMap.clear();
-    programImage = std::move(pcode);
+    const size_t imageBytes = pcode.size();
+    // Keep the debug byte map bounded on constrained devices.
+#if defined(ESP32)
+    constexpr size_t kMaxPcodeMapEntries = 64;
+#else
+    constexpr size_t kMaxPcodeMapEntries = 512;
+#endif
+    const size_t pcodeMapCount = std::min(imageBytes, kMaxPcodeMapEntries);
+    for (size_t i = 0; i < pcodeMapCount; ++i) {
+        pcodeMap[static_cast<uint16_t>(i)] = pcode[i];
+    }
+    managedProgramImage = std::move(replacement);
+    if (managedProgramImage) {
+        decltype(programImage)().swap(programImage);
+        decltype(pcode)().swap(pcode);
+    } else {
+        programImage = std::move(pcode);
+    }
     pageTable.clear();
     frames.clear();
     lruTick = 0;
@@ -1020,20 +1072,8 @@ bool PMachine::loadProgram(std::vector<uint8_t> pcode, const std::string& file, 
     if (pagingConfig.maxFrames == 0) pagingConfig.maxFrames = 24;
 
     const size_t pageSize = pagingConfig.pageSizeBytes;
-    numPages = static_cast<int>((programImage.size() + pageSize - 1) / pageSize);
+    numPages = static_cast<int>((imageBytes + pageSize - 1) / pageSize);
     pageTable.resize(static_cast<size_t>(numPages));
-
-    // Keep a bounded debug view of the image to avoid heap exhaustion from
-    // one map node per byte on constrained devices.
-#if defined(ESP32)
-    constexpr size_t kMaxPcodeMapEntries = 64;
-#else
-    constexpr size_t kMaxPcodeMapEntries = 512;
-#endif
-    const size_t pcodeMapCount = std::min(programImage.size(), kMaxPcodeMapEntries);
-    for (size_t i = 0; i < pcodeMapCount; ++i) {
-        pcodeMap[static_cast<uint16_t>(i)] = programImage[i];
-    }
 
     const size_t residentPages = std::min(static_cast<size_t>(numPages), pagingConfig.maxFrames);
     frames.resize(residentPages);
@@ -1058,7 +1098,7 @@ bool PMachine::loadProgram(std::vector<uint8_t> pcode, const std::string& file, 
     pagingStats.ffsReads = 0;
     pagingStats.cacheHits = residentPages;
 
-    loadResidentDomain("program-image", backingFile, pcode.size(), false);
+    loadResidentDomain("program-image", backingFile, imageBytes, false);
     return true;
 }
 
@@ -1117,10 +1157,11 @@ int PMachine::ensurePageResident(uint16_t vpage) {
 }
 
 bool PMachine::readPCodeByte(uint32_t virtualAddress, uint8_t& outByte) {
-    if (virtualAddress >= programImage.size()) return false;
+    if (virtualAddress >= programImageSize()) return false;
     if (pagingConfig.pageSizeBytes == 0) return false;
     const uint16_t vpage = static_cast<uint16_t>(virtualAddress / pagingConfig.pageSizeBytes);
     if (ensurePageResident(vpage) < 0) return false;
+    if (managedProgramImage) return managedProgramImage->read(virtualAddress, outByte);
     outByte = programImage[virtualAddress];
     return true;
 }
@@ -1507,7 +1548,7 @@ void PMachine::runInstructions(size_t instructionCount,
         return;
     }
     storage->reset();
-    HostedFrameStorage* hostedFrames = hostCallHook ? &storage->frames : nullptr;
+    HostedFrameStorage* hostedFrames = hostCallHook ? storage->frames() : nullptr;
     ManagedStringHeap* hostedStrings = &storage->strings;
     auto& hostCallStorage = storage->calls;
     using NameBinding = std::pair<std::string, Value>;
@@ -2532,6 +2573,10 @@ void PMachine::runInstructions(size_t instructionCount,
                 goto pmachineRunExit;
             }
             GpioPinSemaphore pinSemaphore(pin);
+            if (!pinSemaphore.ready()) {
+                gFlowState["__runtime_error"] = "GPIO lock unavailable";
+                goto pmachineRunExit;
+            }
             if (!pinSemaphore.acquired()) {
                 gFlowState["__runtime_error"] = "GPIO pin is busy";
                 goto pmachineRunExit;

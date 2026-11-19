@@ -1246,7 +1246,7 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
     'importkotlin.io.*', 'importkotlin.io.println', 'importpulse.http.HttpGet',
     'importpulse.net.*', 'importpulse.net.networkDiscoveryStep', 'importpulse.host.*',
     'importpulse.process.*',
-    'importpulse.pmachine.*',
+    'importpulse.pmachine.*', 'importpulse.boot.*', 'importpulse.scheduler.*',
     'importkotlin.test.*', 'importkotlin.test.assertEquals',
     'importkotlinx.coroutines.*', 'importkotlinx.coroutines.yield',
     'importkotlin.coroutines.*', 'importkotlin.coroutines.Continuation',
@@ -1260,7 +1260,8 @@ export function parseKotlin(source, { fileName = 'program.kt' } = {}) {
     ...['eventMethod', 'eventPeer', 'eventPort', 'eventBytes', 'bytesLength', 'bytesGet', 'byteXor',
       'bufferCreate', 'bufferAppend', 'bufferJsonPathText', 'bufferJsonPathInteger', 'bufferRelease',
       'jsonArrayGet', 'jsonArrayCount', 'jsonText', 'jsonSetText', 'jsonSetInteger', 'jsonEmbed',
-      'jsonAppendText', 'cacheCount', 'cacheNext', 'cacheGet', 'cachePut',
+      'jsonAppendText', 'cacheCount', 'cacheNext', 'cacheGet', 'cachePut', 'cacheRemove',
+      'eventBody', 'textHeader', 'textLower', 'textIndex', 'textSlice', 'bytesFromText',
       'cacheSnapshot', 'raiseError'].map(name => `importpulse.host.${name}`),
     ...['networkReady', 'installBundle', 'start', 'stop', 'status', 'checkpoint', 'restore', 'bootFixed']
       .map(name => `importpulse.pmachine.${name}`)

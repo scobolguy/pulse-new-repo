@@ -9,6 +9,7 @@
 #endif
 #include <DNSServer.h>
 #include <ESPAsyncWebServer.h>
+#include <atomic>
 #include <vector>
 
 /**
@@ -155,6 +156,11 @@ public:
      * @return true if connected
      */
     bool connectWiFi(const WiFiCredentials* creds = nullptr, uint32_t timeout = 30);
+
+    bool beginConnection(const WiFiCredentials& creds);
+    bool saveNodeName(const String& requested, String& applied);
+
+    uint32_t credentialRevision() const { return credentialRevision_.load(std::memory_order_acquire); }
     
     /**
      * Auto-provision WiFi
@@ -206,6 +212,7 @@ public:
     void update();
     
 private:
+    std::atomic<uint32_t> credentialRevision_{0};
     String deviceName;
     WiFiCredentials currentCreds;
     ProvisioningMethod provMethod;

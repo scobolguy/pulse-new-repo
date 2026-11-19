@@ -14,7 +14,153 @@ The library implementation lives in `src/`:
 
 Standalone scheduler and dynamic-library C++ tests are already consolidated under `../../testing/pmachines/`.
 
+## Bluetooth discovery profiles
+
+The `esp32_s3_pmachine_n8r8` firmware profile and its OTA derivative exclude
+NimBLE and define `PULSE_DISABLE_BLE_DISCOVERY` to preserve internal RAM.
+They do not expose `host.bluetooth_scan` or advertise `bluetooth.discovery`.
+Direct native scan requests report that discovery is disabled. Other profiles
+retain their existing Bluetooth support.
+
+## LAN discovery ports
+
+New node and cluster configurations use UDP parent port 4210 and sibling port
+4211, matching Aggregator discovery. Saved port settings remain authoritative.
+Nodes provisioned with the old 4000/4100 defaults need their ports updated through
+`POST /node/topology` (form fields `parentPort=4210` and `siblingPort=4211`).
+That API persists the change and immediately announces the node again.
+
+## Transient program image storage
+
+Foreground executions explicitly marked `runtimeUnit.kind = "program"` retain
+their binary/debug image in handle-based managed-heap chunks. Each allocation
+contains a 4 KiB arena plus its small handle table, preferring PSRAM on ESP32
+and falling back to internal RAM. There is no single-image arena/handle limit.
+Resident or pinned images, services, daemons, boot, and the explicit binary
+load API keep their existing storage. Chunk allocation failure returns HTTP 507.
+The image memory-map endpoint reports storage type, chunk count, and chunk
+allocation bytes in internal RAM and PSRAM. Unloading releases all chunks.
+
+This first experiment does not change decoded instruction storage, eliminate
+the temporary binary assembled by the loader, or implement file-backed eviction.
+Savings apply to the retained image during execution, not idle RAM or the
+loader's peak allocation.
+Large contiguous allocations may already go to PSRAM through ESP-IDF, so this
+change primarily frees internal RAM for smaller images that otherwise stay
+in the internal heap. Managed chunks carry additional PSRAM metadata/padding.
+
+## Hardware-handler execution storage
+
+Assemblerish hardware-handler execution storage is allocated on the first
+handler installation, not at startup or when querying/stopping an unused
+handler. This avoids reserving its fixed managed-heap and frame tables in
+internal static RAM on nodes without hardware handlers. Once prepared, the
+storage remains owned by the hardware worker and is reused across invocations
+and subsequent installations. Allocation failures reject installation explicitly.
+
+## Authenticated hosted-image hashes and paging
+
+Authenticated PHI1 image page hashes are allocated explicitly in PSRAM when
+present, without an internal-RAM fallback or an internal-heap reservation for
+the hash table. PSRAM allocation failure rejects loading explicitly.
+
+Without PSRAM, hashes use seekable FFS paging on SD, otherwise a remote file
+server. Local flash is never eligible for hash or managed-string paging.
+Remote paging can coexist with ordinary LittleFS-backed FFS: on no-PSRAM
+nodes, the discovered Aggregator file server (or configured remote FFS URL)
+is probed after network connection, with retries every 15 seconds. Its paging
+root is `/nodes/<normalized-node-name>/paging`. Until eligible storage is
+available, image loading fails rather than falling back to flash.
+Remote paging logs a warning: physical media selection and write endurance
+are the file server's responsibility.
+
+On nodes without PSRAM or SD, FFS automatically creates
+`/nodes/<normalized-node-name>/paging/<mac-without-colons>/.virtual` for
+writable managed strings. This is scratch storage, not a reboot checkpoint.
+A block stays in RAM if its write fails or is short. Instruction images and
+authenticated page hashes keep their existing storage.
+
+For classic 4 MB ESP32 boards that cannot fit the local P-code supervisor
+in RAM, build `esp32dev_network_bootstrap`. This opt-in profile starts Wi-Fi
+from saved profiles or serves `/web/provisioning.html` from LittleFS using
+the native provisioning routes. FFS starts only after station association;
+hosted-service restoration waits for SD or remote paging. Check
+`GET /ffs/remote` for `pagingBackend` (`sd`, `remote`, or `unavailable`).
+To configure an Aggregator explicitly, POST form fields `host`, `port`, and
+`path=/api/fileserver` to `/ffs/remote`, then restart the node. Omit `path`
+for a standalone file server that serves `/ffs/storage` at its root.
+The P-code supervisor and its slot-0 policy runtime are not started by this
+profile. Bluetooth, HTTPS, and OTA updates are disabled. Keep HTTP
+provisioning on a trusted network. Other profiles keep their normal
+P-code boot path.
+
+On the bootstrap profile, hosted installation and execution share the
+Arduino loop task instead of reserving two additional FreeRTOS stacks.
+The profile keeps 6 KiB of resident managed strings and a 4 KiB object
+arena; strings can spill to eligible paging storage, but objects cannot.
+
+Each paged hash record carries an HMAC-SHA256 tag bound to its page index and
+a fresh per-load key retained in RAM. Changing the image and its paging file
+together cannot bypass the original image signature. The bounded working set
+does not retain the complete hash table internally. Unloading removes the
+temporary hash file; unexpected power loss may leave orphaned `.swap` files.
+The host status reports `instructionHashStorage` (`psram`, `ffs-sd`, or
+`ffs-remote`) and `instructionHashBytes` for each hosted image. The physical
+hosted-image verifier checks these fields as well as existing integrity tests.
+
+Scheduler loads stream entry digests and hosted maps rather than buffering
+whole files, and keep temporary JSON in PSRAM when available. Hosted bindings
+allocate their reusable JSON arena lazily in PSRAM. Hosted status builds its
+JSON there and sends one retained body in bounded TCP writes. The interpreter
+also reserves its variable frames, string arena, and object arena in PSRAM
+when available; it keeps its synchronization flag in the execution context.
+Boards without PSRAM allocate these workspaces from internal RAM. Portless services
+do not pay a UDP heap reserve. The legacy UDP listener requires 32 KiB of free
+internal heap before binding; lightweight daemon sockets require 16 KiB before
+and after binding. The status endpoint reports internal free heap, its largest
+contiguous block, and free PSRAM separately. Inline execution workers exit
+after each request, returning their stack to the system instead of keeping it
+allocated while idle.
+
+The N8R8 PMachine profile temporarily excludes HTTPS using the existing
+`ENABLE_HTTPS` compile flag. The OTA variant retains signed BootFS updates
+but excludes native firmware uploads.
+
 ## Program bundle inventory
+
+The slot scheduler API runs shared Pulse Kotlin/P-code in protected slot 0:
+
+- `GET /api/pmachine/scheduler` lists slot 0 and general-purpose slots 1..16.
+- `POST /api/pmachine/scheduler/load` accepts JSON
+  `{"manifestPath":"/pmachine/programs/example/manifest.json","slot":16}`.
+  Omit `slot` to select the first free slot.
+- `POST /api/pmachine/scheduler/unload` accepts `{"slot":16}`.
+
+Upload signed bundle artifacts through FFS first. Bundle `type` must be
+`service`, `daemon`, or `transient`; all sixteen slots accept any type.
+Entry hashes, signed maps, bundle-relative paths and host contracts are checked
+before execution. Services and daemons remain loaded; transients execute once
+and release their slot. A standalone daemon can use a private empty service
+context, or supply `serviceEntry` and `serviceProgramMap` for shared caches.
+Daemon bundles can supply a `daemons` array with 1–16 definitions, each with
+an `entry`, `programMap`, SHA-256 `sha256`, and optional `udpPort` and
+`multicastGroup`. All listeners share the companion service's cache; a failed
+artifact check or listener bind prevents the whole slot from starting.
+Locally stored hosted images use one page of per-file read buffering rather
+than layering a full VFS buffer per image over the shared verified page cache.
+Persistent descriptors (including the selected manifest) are atomically saved
+to `/pmachine/slot-scheduler.json` and restored after FFS becomes available.
+Recovery failures are logged and reject new scheduler requests until recovery
+succeeds. The scheduler reuses the synchronized boot execution storage rather
+than adding another fixed VM context. Its managed string arena grows lazily
+to its 65,528-byte handle-addressable limit (PSRAM under the N8R8 allocation
+policy); allocation failure is
+reported rather than silently truncating a persistent snapshot.
+
+Legacy bundle/process-slot endpoints remain available for older deployments.
+Their deployment table is separate; bulk legacy stop/delete operations cannot
+invalidate scheduler ownership. Unload scheduler programs through the scheduler
+API before using those operations. Legacy lifecycle policy is not yet retired.
 
 `GET /api/pmachine/programs` lists installed manifests with their name, version,
 type, configured service index, and a `running` boolean. Running reflects a

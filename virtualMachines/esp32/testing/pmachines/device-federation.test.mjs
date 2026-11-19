@@ -95,6 +95,43 @@ test('Pulse health uses daemon diagnostics when the status daemon field is a cou
   assert.equal(source.error, '');
 });
 
+test('ONVIF camera snapshots retain the service URL and reject mismatched advertised hosts', async () => {
+  const f = fixture(['onvif']);
+  const fields = {
+    name: 'ONVIF camera', protocol: 'onvif', address: '192.168.2.76',
+    deviceType: 'tapo-camera', port: '2020', serviceUrl: 'http://192.168.2.76:2020/onvif/device_service'
+  };
+  let url = fields.serviceUrl;
+  f.nodes[0].mutate = (body, target) => {
+    if (target.pathname.endsWith('/status')) return {
+      ...body, daemons: [{ id: 'tapo-camera-collector', failures: 0, lastError: '' }]
+    };
+    assert.equal(target.pathname, '/api/cameras/snapshot');
+    return { ...body, revision: '1', sequence: 1, total: 1,
+      records: [{ key: 'camera:onvif:192.168.2.76:2020', device: { ...fields, serviceUrl: url },
+        observationMs: 1000, observationSequence: 1, remainingTTLms: 360000 }] };
+  };
+  assert.equal((await f.federation.refresh()).completeness, true);
+  assert.deepEqual(walk(f.federation)[0].device, fields);
+  url = 'http://192.168.2.77:2020/onvif/device_service';
+  const failed = await f.federation.refresh();
+  assert.match(failed.sources[0].error, /Invalid ONVIF service URL/);
+  assert.deepEqual(walk(f.federation)[0].device, fields);
+});
+
+test('federated ONVIF health reports a deferred scan and recovers after a successful scan', async () => {
+  const f = fixture(['onvif']);
+  let lastError = 'ONVIF discovery deferred: insufficient internal heap';
+  f.nodes[0].mutate = (body, target) => target.pathname.endsWith('/status')
+    ? { ...body, daemons: [{ id: 'tapo-camera-collector', failures: 1, lastError }] }
+    : body;
+  const deferred = await f.federation.refresh();
+  assert.equal(deferred.completeness, false);
+  assert.equal(deferred.sources[0].error, lastError);
+  lastError = '';
+  assert.equal((await f.federation.refresh()).completeness, true);
+});
+
 test('Kasa observations survive a five-minute scan interval without extending other protocols', async () => {
   const f = fixture(['kasa', 'tuya']);
   f.put(0, 1, 'Kasa', 360000);
@@ -264,7 +301,7 @@ test('identity forgery, invalid namespaces, stale source ordering and limits rej
   await f.federation.refresh();
   assert.match(f.federation.metadata().sources[0].error, /Stale source revision/);
   assert.equal(f.federation.page().total, 1);
-  assert.throws(() => fixture(['kasa'], { maxSources: 9 }), /limits/);
+  assert.throws(() => fixture(['kasa'], { maxSources: 10 }), /limits/);
   assert.throws(() => createDeviceFederation({ sources: [
     { collectorId: 'a', protocol: 'kasa', origin: 'http://127.0.0.1:1' },
     { collectorId: 'b', protocol: 'kasa', origin: 'http://127.0.0.1:1' }

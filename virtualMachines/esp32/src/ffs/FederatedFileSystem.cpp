@@ -2,6 +2,7 @@
 #include "FederatedFileSystem.h"
 #include <ArduinoJson.h>
 #include "RemoteFileSystem.h"
+#include <exception>
 #if defined(ESP32)
 #include <SD.h>
 #endif
@@ -311,6 +312,93 @@ File FederatedFileSystem::openRandomAccessFile(const String &logicalName) {
     ResolvedPath resolved = resolvePath(logicalName);
     if (resolved.remote || resolved.readOnly || !_fs) return File();
     return _fs->open(resolved.resolvedPath, "w+");
+}
+
+File FederatedFileSystem::openPagingFile(const String &logicalName) {
+    if (_backend == FFSBackend::SD) {
+        File file = openRandomAccessFile(logicalName);
+        if (!file) Serial.printf("[FFS] Unable to open SD paging file: %s\n", logicalName.c_str());
+        return file;
+    }
+    const auto remote = std::atomic_load(&_pagingRemoteFs);
+    if (_backend != FFSBackend::Remote && !remote) {
+        Serial.println("[FFS] Paging rejected: local flash is not eligible; SD or remote FFS is required");
+        return File();
+    }
+    Serial.println("[FFS] Warning: remote paging media and write endurance are the file server's responsibility");
+    File file = _backend == FFSBackend::Remote ? openRandomAccessFile(logicalName)
+        : remote->open(logicalName.c_str(), "w+");
+    if (!file) Serial.printf("[FFS] Unable to open paging file: %s\n", logicalName.c_str());
+    return file;
+}
+
+FFSStatus FederatedFileSystem::removePagingFile(const String &logicalName) {
+    // Cleanup can run during allocation-failure unwinding; avoid another allocation then.
+    if (std::uncaught_exception()) {
+        Serial.println("[FFS] Paging cleanup deferred while unwinding; temporary file may remain");
+        return FFSStatus::ERR_IO;
+    }
+    try {
+        if (_backend == FFSBackend::SD || _backend == FFSBackend::Remote) return remove(logicalName);
+        const auto remote = std::atomic_load(&_pagingRemoteFs);
+        if (!remote) return FFSStatus::ERR_UNSUPPORTED;
+        return remote->remove(logicalName.c_str()) ? FFSStatus::OK : FFSStatus::ERR_IO;
+    } catch (const std::bad_alloc&) {
+        Serial.println("[FFS] Insufficient memory to remove paging file");
+        return FFSStatus::ERR_FULL;
+    }
+}
+
+bool FederatedFileSystem::beginPagingRemote(const String& baseUrl, const String& root, const String& deviceId) {
+    if (_backend == FFSBackend::SD) return true;
+    if (std::atomic_load(&_pagingRemoteFs)) return true;
+    try {
+        auto remote = std::make_shared<RemoteFileSystem>(baseUrl, root);
+        if (!remote->begin()) {
+            Serial.println("[FFS] Remote paging storage unavailable");
+            return false;
+        }
+        const String path = String("/") + deviceId + VIRTUAL_FILE_PATH;
+        if (deviceId.length() != 12 || path.length() != 1 + 12 + strlen(VIRTUAL_FILE_PATH)) {
+            Serial.println("[FFS] Cannot prepare .virtual without a valid device ID");
+            return false;
+        }
+        File backing = remote->open(path.c_str(), "a+");
+        if (!backing || backing.isDirectory()) {
+            Serial.println("[FFS] Could not prepare remote .virtual backing file");
+            return false;
+        }
+        backing.close();
+        _remoteVirtualPath = path;
+        if (_remoteVirtualPath != path) {
+            Serial.println("[FFS] Could not retain remote .virtual path");
+            return false;
+        }
+        std::shared_ptr<fs::FS> filesystem = remote;
+        std::atomic_store(&_pagingRemoteFs, filesystem);
+        Serial.println("[FFS] Remote .virtual ready; media and write endurance are the server's responsibility");
+        return true;
+    } catch (const std::bad_alloc&) {
+        Serial.println("[FFS] Insufficient memory to initialize remote paging storage");
+        return false;
+    }
+}
+
+bool FederatedFileSystem::writablePagingReady() const {
+    return _backend == FFSBackend::SD || static_cast<bool>(std::atomic_load(&_pagingRemoteFs));
+}
+
+File FederatedFileSystem::openRemoteVirtualFile() {
+    const auto remote = std::atomic_load(&_pagingRemoteFs);
+    if (!remote) return File();
+    File backing = remote->open(_remoteVirtualPath.c_str(), "r+");
+    if (backing && backing.isDirectory()) backing.close();
+    return backing;
+}
+
+FFSBackend FederatedFileSystem::pagingBackend() const {
+    if (_backend == FFSBackend::SD || _backend == FFSBackend::Remote) return _backend;
+    return std::atomic_load(&_pagingRemoteFs) ? FFSBackend::Remote : FFSBackend::Unavailable;
 }
 
 FFSStatus FederatedFileSystem::remove(const String &logicalName) {

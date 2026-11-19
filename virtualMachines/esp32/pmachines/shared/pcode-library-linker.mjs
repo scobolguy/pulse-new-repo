@@ -1,3 +1,5 @@
+import { requiredHostCapabilities } from './contracts/host-capabilities.mjs';
+
 const EXECUTABLE_LINE = line => line.trim() && !line.trim().startsWith('#') && !line.trim().endsWith(':');
 
 function normalizedIdentifier(value) {
@@ -115,9 +117,10 @@ function mergeVersion(rootMap, libraryMap, key, libraryId) {
 /**
  * Statically links callable P-code procedures into a program.
  *
- * Each library is { id, pcodeText, programMap, exports, initialize? }. Only exported
+ * Each library is { id, pcodeText, programMap, exports, initialize?, inferCapabilities? }. Only exported
  * procedures and their CALL dependencies are copied; each library's MAIN is excluded.
  * Libraries with globals must name an exported initializer that initializes them.
+ * inferCapabilities derives binding capabilities from the included closure only.
  */
 export function linkPcodeLibraries(program, libraries = []) {
   if (!program || typeof program.pcodeText !== 'string' || !program.programMap) {
@@ -258,7 +261,13 @@ export function linkPcodeLibraries(program, libraries = []) {
     pcodeText = `${pcodeText.trimEnd()}\n${snippets.join('\n')}\n`;
 
     programMap.globals = [...new Set([...(programMap.globals || []), ...addedGlobals])];
-    for (const capability of library.programMap.requiredHostCapabilities || []) rootCapabilities.add(capability);
+    const capabilities = library.inferCapabilities
+      ? requiredHostCapabilities(snippets.map(line => {
+        const match = /^CALL_EXT\s+(\S+)\s+\d+$/.exec(line.trim());
+        return match ? { mnemonic: 'CALL_EXT', operand: { label: match[1] } } : { mnemonic: '' };
+      }))
+      : library.programMap.requiredHostCapabilities || [];
+    for (const capability of capabilities) rootCapabilities.add(capability);
     if (library.programMap.targets) {
       targets = new Set([...targets].filter(target => library.programMap.targets.includes(target)));
       if (targets.size === 0) throw new Error(`[PCODE-LINK] Library ${id} has no compatible target`);

@@ -20,6 +20,7 @@
     "ssdpHttpPort": 4328
   },
   "sources": [
+    { "protocol": "onvif", "collectorId": "scheduler-slot-8", "origin": "http://192.168.2.83" },
     { "protocol": "kasa", "collectorId": "kasa-js", "origin": "http://127.0.0.1:4309" },
     { "protocol": "tuya", "collectorId": "tuya-js", "origin": "http://127.0.0.1:4307" },
     { "protocol": "ssdp", "collectorId": "ssdp-js", "origin": "http://127.0.0.1:4308" },

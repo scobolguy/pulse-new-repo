@@ -1,6 +1,6 @@
 #include "bluetooth_discovery.h"
 
-#if defined(ESP32)
+#if defined(ESP32) && !defined(PULSE_DISABLE_BLE_DISCOVERY)
 #include <NimBLEDevice.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -146,6 +146,13 @@ bool scanBluetoothDevices(int seconds, std::string& result, std::string& error) 
     serializeJson(document, result);
     xSemaphoreGive(scanMutex);
     return true;
+}
+}
+#elif defined(ESP32)
+namespace pmachine {
+bool scanBluetoothDevices(int, std::string&, std::string& error) {
+    error = "Bluetooth discovery is disabled in this firmware profile";
+    return false;
 }
 }
 #endif

@@ -96,6 +96,13 @@ public:
     File openReadFile(const String &logicalName);
     // Truncates and opens for seekable read/write (used for p-machine heap swap).
     File openRandomAccessFile(const String &logicalName);
+    // Paging never writes local flash. Remote storage selection belongs to its server.
+    File openPagingFile(const String &logicalName);
+    FFSStatus removePagingFile(const String &logicalName);
+    bool beginPagingRemote(const String& baseUrl, const String& root, const String& deviceId);
+    bool writablePagingReady() const;
+    File openRemoteVirtualFile();
+    FFSBackend pagingBackend() const;
     FFSStatus remove(const String &logicalName);
     FFSStatus listFiles(std::vector<String> &outNames);
 
@@ -127,6 +134,7 @@ public:
 
 private:
     static constexpr const char* MOUNT_TABLE_PATH = "/ffs/.mounts.json";
+    static constexpr const char* VIRTUAL_FILE_PATH = "/.virtual";
 
     struct ResolvedPath {
         bool mounted = false;
@@ -141,6 +149,8 @@ private:
     FFSBackend _backend;
     fs::FS *_fs;
     std::unique_ptr<fs::FS> _remoteFs;
+    std::shared_ptr<fs::FS> _pagingRemoteFs;
+    String _remoteVirtualPath;
     String _basePath;
     bool _inTransaction;
     int _nextHandle = 1;

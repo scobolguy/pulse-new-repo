@@ -4,6 +4,12 @@ external fun eventMethod(): String
 external fun eventPeer(): String
 external fun eventPort(): Int
 external fun eventBytes(): String
+external fun eventBody(): String
+external fun textHeader(value: String, name: String): String
+external fun textLower(value: String): String
+external fun textIndex(value: String, needle: String): Int
+external fun textSlice(value: String, start: Int, count: Int): String
+external fun bytesFromText(value: String): String
 external fun bytesLength(hex: String): Int
 external fun bytesGet(hex: String, index: Int): Int
 external fun byteXor(left: Int, right: Int): Int
@@ -24,4 +30,5 @@ external fun cacheNext(name: String, cursor: String): String
 external fun cacheGet(name: String, key: String): String
 external fun cachePut(name: String, key: String, value: String, ttlMs: Int): Int
 external fun cacheSnapshot(name: String, cursor: String, revision: String): String
+external fun cacheRemove(name: String, key: String): Int
 external fun raiseError(message: String): Int

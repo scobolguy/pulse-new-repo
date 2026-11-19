@@ -21,11 +21,6 @@ namespace pmachine {
 // Track spawned contexts for COBEGIN/COEND
 static std::map<uint16_t, std::vector<uint16_t>> cobeginContexts;
 
-// Dynamic library system (Phase 6 - fully implemented)
-static LibraryRegistry* globalLibraryRegistry = nullptr;
-static ThunkTable* globalThunkTable = nullptr;
-static DynamicLibraryLoader* globalLibraryLoader = nullptr;
-
 // Gateway registry (placeholder)
 static std::map<uint16_t, uint16_t> gatewayHandlers;
 
@@ -39,20 +34,9 @@ static uint16_t nextVMFileHandle = 1;
 // ============================================================================
 
 void initializeDynamicLibrarySystem() {
-    if (!globalLibraryRegistry) {
-        globalLibraryRegistry = new LibraryRegistry();
-        globalThunkTable = new ThunkTable();
-        globalLibraryLoader = new DynamicLibraryLoader(*globalLibraryRegistry, *globalThunkTable);
-    }
 }
 
 void shutdownDynamicLibrarySystem() {
-    delete globalLibraryLoader;
-    delete globalThunkTable;
-    delete globalLibraryRegistry;
-    globalLibraryLoader = nullptr;
-    globalThunkTable = nullptr;
-    globalLibraryRegistry = nullptr;
 }
 
 // ============================================================================
@@ -198,166 +182,46 @@ void handle_SEMINIT(PMachine& vm, PMachineScheduler& scheduler,
 }
 
 // ============================================================================
-// DYNAMIC LIBRARY OPCODE HANDLERS (Phase 6 - Fully Implemented)
+// LEGACY DYNAMIC LIBRARY OPCODES
 // ============================================================================
 
 void handle_DL_LOAD(PMachine& vm, PMachineScheduler& scheduler,
                     const PInstruction& instr, std::vector<int>& stack, uint16_t& pc) {
-    // Initialize library system if needed
-    initializeDynamicLibrarySystem();
-    
-    // Get library name from string operand
-    std::string libraryName = instr.strOperand;
-    
-    // Check if already loaded
-    if (globalLibraryRegistry->isLibraryLoaded(libraryName)) {
-        SERIAL_PRINTF("Library %s already loaded\n", libraryName.c_str());
-        stack.push_back(1); // Success
-        pc++;
-        return;
-    }
-    
-    // Get base PC from stack (or use default)
-    uint16_t basePC = !stack.empty() ? stack.back() : 10000;
+    SERIAL_PRINTLN(legacyDynamicLinkerError());
     if (!stack.empty()) stack.pop_back();
-    
-    // Try to load library from JSON manifest
-    // In production, this would load from SD card
-    // For now, we expect the manifest to be provided separately
-    
-    // Push result onto stack
-    // 1 = success, 0 = failure
-    // Real loading happens via loadLibraryFromJSON called externally
-    stack.push_back(1);
-    
-    SERIAL_PRINTF("OP_DL_LOAD: %s at PC %u\n", libraryName.c_str(), static_cast<unsigned>(basePC));
-    
+    stack.push_back(0);
     pc++;
 }
 
 void handle_DL_CALL(PMachine& vm, PMachineScheduler& scheduler,
                     const PInstruction& instr, std::vector<int>& stack, uint16_t& pc) {
-    // Initialize library system if needed
-    initializeDynamicLibrarySystem();
-    
-    // Get thunk ID from operand
-    uint16_t thunkId = instr.intOperand;
-    
-    // Look up thunk
-    Thunk* thunk = globalThunkTable->getThunk(thunkId);
-    if (!thunk) {
-        SERIAL_PRINTF("ERROR: Thunk %u not found\n", static_cast<unsigned>(thunkId));
-        stack.push_back(-1); // Error
-        pc++;
-        return;
-    }
-    
-    // Check if thunk is resolved
-    if (!thunk->resolved) {
-        // Lazy resolution: resolve now
-        uint16_t targetPC = globalLibraryRegistry->resolveFunction(
-            thunk->libraryName,
-            thunk->functionName
-        );
-        
-        if (targetPC == 0) {
-            SERIAL_PRINTF("ERROR: Cannot resolve %s.%s\n",
-                          thunk->libraryName.c_str(),
-                          thunk->functionName.c_str());
-            stack.push_back(-1); // Error
-            pc++;
-            return;
-        }
-        
-        // Resolve thunk
-        globalThunkTable->resolveThunk(thunkId, targetPC);
-        thunk->targetPC = targetPC;
-    }
-    
-    // Increment call count for profiling
-    thunk->callCount++;
-    
-    // Jump to library function
-    // Save return address on stack
-    stack.push_back(pc + 1);
-    
-    // Jump to target
-    pc = thunk->targetPC;
-    
-    SERIAL_PRINTF("OP_DL_CALL: %s.%s -> PC %u (call #%u)\n",
-                  thunk->libraryName.c_str(),
-                  thunk->functionName.c_str(),
-                  static_cast<unsigned>(thunk->targetPC),
-                  static_cast<unsigned>(thunk->callCount));
+    // This opcode addresses the old 16-bit code array, not a checked image.
+    // Never reinterpret an image slot as a PC in that unrelated address space.
+    SERIAL_PRINTLN(legacyDynamicLinkerError());
+    stack.push_back(-1);
+    pc++;
 }
 
 void handle_DL_UNLOAD(PMachine& vm, PMachineScheduler& scheduler,
                       const PInstruction& instr, std::vector<int>& stack, uint16_t& pc) {
-    // Initialize library system if needed
-    initializeDynamicLibrarySystem();
-    
-    // Get library name from string operand
-    std::string libraryName = instr.strOperand;
-    
-    // Unload library
-    bool success = globalLibraryRegistry->unloadLibrary(libraryName);
-    
-    // Push result onto stack
-    stack.push_back(success ? 1 : 0);
-    
-    SERIAL_PRINTF("OP_DL_UNLOAD: %s %s\n",
-                  libraryName.c_str(),
-                  success ? "SUCCESS" : "FAILED");
-    
+    SERIAL_PRINTLN("Live image unload is not supported; release the execution context");
+    stack.push_back(0);
     pc++;
 }
 
 void handle_DL_RESOLVE(PMachine& vm, PMachineScheduler& scheduler,
                        const PInstruction& instr, std::vector<int>& stack, uint16_t& pc) {
-    // Initialize library system if needed
-    initializeDynamicLibrarySystem();
-    
-    // Get function name and library name from stack
-    if (stack.size() < 2) {
-        stack.push_back(0); // Error
-        pc++;
-        return;
-    }
-    
-    int functionNameIdx = stack.back(); stack.pop_back();
-    int libraryNameIdx = stack.back(); stack.pop_back();
-    
-    // In real implementation, would look up strings from string pool
-    // For now, use placeholder
-    std::string libraryName = "library_" + std::to_string(libraryNameIdx);
-    std::string functionName = "function_" + std::to_string(functionNameIdx);
-    
-    // Resolve function
-    uint16_t targetPC = globalLibraryRegistry->resolveFunction(libraryName, functionName);
-    
-    // Push result onto stack
-    stack.push_back(targetPC);
-    
+    SERIAL_PRINTLN(legacyDynamicLinkerError());
+    if (!stack.empty()) stack.pop_back();
+    if (!stack.empty()) stack.pop_back();
+    stack.push_back(-1);
     pc++;
 }
 
 void handle_DL_LIST(PMachine& vm, PMachineScheduler& scheduler,
                     const PInstruction& instr, std::vector<int>& stack, uint16_t& pc) {
-    // Initialize library system if needed
-    initializeDynamicLibrarySystem();
-    
-    // Get list of loaded libraries
-    std::vector<std::string> libraries = globalLibraryRegistry->getLoadedLibraries();
-    
-    // Push count onto stack
-    stack.push_back(libraries.size());
-    
-    // Print library list
-    SERIAL_PRINTF("Loaded libraries (%u):\n", static_cast<unsigned>(libraries.size()));
-    for (const auto& lib : libraries) {
-        SERIAL_PRINTF("  - %s\n", lib.c_str());
-    }
-    
+    SERIAL_PRINTLN(legacyDynamicLinkerError());
+    stack.push_back(0);
     pc++;
 }
 

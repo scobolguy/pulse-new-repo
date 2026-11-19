@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <csignal>
+#include <cstring>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -46,6 +47,10 @@ struct Options {
     uint64_t maxSteps = 0;
     uint64_t maxFileBytes = 262144;
     std::string aggregatorUrl;
+    std::string librarianUrl;
+    std::string signingKey;
+    std::string signingKeyId;
+    std::string ffsRoot;
     bool debug = false;
     std::map<std::string, pulse::native::StorageRootGrant> storageRoots;
 };
@@ -104,6 +109,9 @@ void addStorageRoot(Options& options, const std::string& value, bool readOnly) {
 Options parseOptions(int argc, char** argv) {
     Options options;
     if (const char* value = std::getenv("PULSE_AGGREGATOR_URL")) options.aggregatorUrl = value;
+    if (const char* value = std::getenv("PULSE_LIBRARIAN_URL")) options.librarianUrl = value;
+    if (const char* value = std::getenv("PCODE_SIGNING_KEY")) options.signingKey = value;
+    if (const char* value = std::getenv("PCODE_SIGNING_KEY_ID")) options.signingKeyId = value;
     for (int i = 1; i < argc; ++i) {
         const std::string argument = argv[i];
         auto next = [&]() -> std::string {
@@ -117,6 +125,8 @@ Options parseOptions(int argc, char** argv) {
         else if (argument == "--max-steps") options.maxSteps = parseBudget(next());
         else if (argument == "--max-file-bytes") options.maxFileBytes = parsePositiveSize(next(), "--max-file-bytes");
         else if (argument == "--aggregator-url") options.aggregatorUrl = next();
+        else if (argument == "--librarian-url") options.librarianUrl = next();
+        else if (argument == "--ffs-root") options.ffsRoot = next();
         else if (argument == "--debug") options.debug = true;
         else if (argument == "--storage-root") addStorageRoot(options, next(), true);
         else if (argument == "--writable-storage-root") addStorageRoot(options, next(), false);
@@ -124,7 +134,8 @@ Options parseOptions(int argc, char** argv) {
             std::cout << "Usage: pulse_native_service_host --pcode FILE --program-map FILE "
                          "[--host ADDRESS] [--port 0..65535] [--max-steps N] [--debug] "
                          "[--max-file-bytes N] [--storage-root ALIAS=ABSOLUTE_PATH] "
-                         "[--writable-storage-root ALIAS=ABSOLUTE_PATH] [--aggregator-url HTTP_URL]\n";
+                         "[--writable-storage-root ALIAS=ABSOLUTE_PATH] [--aggregator-url HTTP_URL] "
+                         "[--librarian-url HTTP_URL] [--ffs-root PMACHINE_FFS_DIRECTORY]\n";
             std::exit(0);
         } else throw std::runtime_error("Unknown option: " + argument);
     }
@@ -324,7 +335,7 @@ std::string statusText(int status) {
 void sendResponse(Socket client, const pulse::native::HttpResponse& response) {
     std::ostringstream headers;
     headers << "HTTP/1.1 " << response.status << ' ' << statusText(response.status) << "\r\n"
-            << "Content-Type: application/json; charset=utf-8\r\n"
+            << "Content-Type: " << response.contentType << "\r\n"
             << "Cache-Control: no-store\r\n"
             << "Content-Length: " << response.jsonBody.size() << "\r\n"
             << "Connection: close\r\n\r\n";
@@ -334,6 +345,45 @@ void sendResponse(Socket client, const pulse::native::HttpResponse& response) {
 
 void sendError(Socket client, int status, const std::string& message) {
     sendResponse(client, pulse::native::HttpResponse{status, "{\"error\":" + quoteJson(message) + "}"});
+}
+
+std::string xmlEscape(const std::string& value) {
+    std::string result;
+    for (const char character : value) {
+        if (character == '&') result += "&amp;";
+        else if (character == '<') result += "&lt;";
+        else if (character == '>') result += "&gt;";
+        else if (character == '"') result += "&quot;";
+        else if (character == '\'') result += "&apos;";
+        else result.push_back(character);
+    }
+    return result;
+}
+
+bool sendXmlDiagnostic(Socket client, const std::string& message) {
+    for (const int status : {400, 422}) {
+        const auto rawPrefix = "XML_RESPONSE|" + std::to_string(status) + "|";
+        if (message.rfind(rawPrefix, 0) == 0) {
+            sendResponse(client, pulse::native::HttpResponse{
+                status, message.substr(rawPrefix.size()), "application/xml; charset=utf-8"});
+            return true;
+        }
+    }
+    constexpr const char* prefix = "XML_DIAGNOSTIC|";
+    if (message.rfind(prefix, 0) != 0) return false;
+    const auto prefixLength = std::strlen(prefix);
+    const auto lineEnd = message.find('|', prefixLength);
+    const auto positionEnd = lineEnd == std::string::npos ? std::string::npos : message.find('|', lineEnd + 1);
+    if (lineEnd == std::string::npos || positionEnd == std::string::npos) return false;
+    const auto line = message.substr(prefixLength, lineEnd - prefixLength);
+    const auto position = message.substr(lineEnd + 1, positionEnd - lineEnd - 1);
+    const auto detail = message.substr(positionEnd + 1);
+    const std::string body = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Pacs008ValidationError "
+        "xmlns=\"urn:pulse:pacs008:validation-error:v1\"><Message>" + xmlEscape(detail)
+        + "</Message><Line>" + line + "</Line><Position>" + position
+        + "</Position></Pacs008ValidationError>";
+    sendResponse(client, pulse::native::HttpResponse{400, body, "application/xml; charset=utf-8"});
+    return true;
 }
 
 Socket createListener(const std::string& host, int port, int& boundPort) {
@@ -366,8 +416,10 @@ Socket createListener(const std::string& host, int port, int& boundPort) {
     return listener;
 }
 
-void serve(Socket listener, const pulse::native::NativeService& service, uint64_t maxBodyBytes, uint64_t maxSteps) {
+void serve(Socket listener, pulse::native::NativeService& service, uint64_t maxBodyBytes,
+    uint64_t maxSteps, size_t storageRootCount) {
     while (!stopRequested) {
+        service.pollScheduler();
         fd_set readSet;
         FD_ZERO(&readSet);
         FD_SET(listener, &readSet);
@@ -406,24 +458,57 @@ void serve(Socket listener, const pulse::native::NativeService& service, uint64_
                 if (service.filesystemReadEnabled()) filesystemSupported += ',';
                 filesystemSupported += "\"filesystem.write\"";
             }
-            filesystemSupported += ']';
+            if (service.filesystemReadEnabled() || service.filesystemWriteEnabled()) filesystemSupported += ',';
+            if (service.artifactReadEnabled()) filesystemSupported += "\"artifact.read\",";
+            if (service.brokerPublishEnabled()) filesystemSupported += "\"broker.publish\",";
+            filesystemSupported += "\"xml.stream\"]";
+            std::string runtimeProfile = "{\"version\":1,\"target\":\"native\",\"runtime\":\"native\","
+                "\"profile\":\"desktop\",\"contractVersions\":{\"serviceHostBindings\":1,"
+                "\"hostCapabilities\":1,\"runtimeProfile\":1},\"supportedHostCapabilities\":"
+                + filesystemSupported
+                + ",\"taskCapabilities\":[],\"execution\":{\"model\":\"serial\","
+                  "\"cpuParallelism\":1,\"maxConcurrentPrograms\":1},\"limits\":{\"maxRequestBytes\":20000000,"
+                  "\"maxResponseBytes\":20000000,\"maxSteps\":"
+                + (maxSteps ? std::to_string(maxSteps) : "null")
+                + "},\"resources\":{\"storageRoots\":" + std::to_string(storageRootCount) + "}}";
             const std::string capabilities = "{\"version\":1,\"profile\":\"desktop\",\"runtime\":\"native\","
                 "\"filesystem\":" + std::string(service.filesystemReadEnabled() ? "true" : "false") +
-                ",\"supported\":" + filesystemSupported + ",\"limits\":{\"maxBodyBytes\":1048576,"
-                "\"maxResponseBytes\":1048576,\"maxSteps\":" +
+                ",\"supported\":" + filesystemSupported + ",\"limits\":{\"maxBodyBytes\":20000000,"
+                "\"maxResponseBytes\":20000000,\"maxSteps\":" +
                 (maxSteps ? std::to_string(maxSteps) : "null") + "}}";
             sendResponse(client, pulse::native::HttpResponse{200,
-                "{\"running\":true,\"serviceId\":" + quoteJson(service.serviceId()) +
-                ",\"capabilities\":" + capabilities + "}"});
+                "{\"running\":true,\"hostBindingsVersion\":1,\"hostCapabilitiesVersion\":1,"
+                "\"serviceId\":" + quoteJson(service.serviceId()) +
+                ",\"capabilities\":" + capabilities + ",\"runtimeProfile\":" + runtimeProfile + "}"});
+        } else if (parsed.request.method == "GET" && parsed.request.path == "/pmachine/runtime/profile") {
+            std::string supported = "[";
+            if (service.filesystemReadEnabled()) supported += "\"filesystem.read\",";
+            if (service.filesystemWriteEnabled()) supported += "\"filesystem.write\",";
+            if (service.artifactReadEnabled()) supported += "\"artifact.read\",";
+            if (service.brokerPublishEnabled()) supported += "\"broker.publish\",";
+            supported += "\"xml.stream\"]";
+            const std::string runtimeProfile = "{\"version\":1,\"target\":\"native\",\"runtime\":\"native\","
+                "\"profile\":\"desktop\",\"contractVersions\":{\"serviceHostBindings\":1,"
+                "\"hostCapabilities\":1,\"runtimeProfile\":1},\"supportedHostCapabilities\":" + supported +
+                ",\"taskCapabilities\":[],\"execution\":{\"model\":\"serial\","
+                  "\"cpuParallelism\":1,\"maxConcurrentPrograms\":1},\"limits\":{\"maxRequestBytes\":20000000,"
+                  "\"maxResponseBytes\":20000000,\"maxSteps\":"
+                + (maxSteps ? std::to_string(maxSteps) : "null")
+                + "},\"resources\":{\"storageRoots\":" + std::to_string(storageRootCount) + "}}";
+            sendResponse(client, pulse::native::HttpResponse{200, runtimeProfile});
         } else {
             try {
                 const auto response = service.dispatch(parsed.request);
-                if (response.jsonBody.size() > 1048576) {
-                    sendError(client, 503, "Native HTTP response exceeds 1048576 bytes");
+                if (response.jsonBody.size() > 20000000) {
+                    sendError(client, 503, "Native HTTP response exceeds 20000000 bytes");
                 } else {
                     sendResponse(client, response);
                 }
             } catch (const std::exception& error) {
+                if (sendXmlDiagnostic(client, error.what())) {
+                    closeSocket(client);
+                    continue;
+                }
                 const auto* httpError = dynamic_cast<const pulse::native::HttpError*>(&error);
                 sendError(client, httpError ? httpError->status() : 500, error.what());
             }
@@ -438,13 +523,18 @@ int main(int argc, char** argv) {
     try {
         const auto options = parseOptions(argc, argv);
         SocketRuntime socketRuntime;
-        const pulse::native::NativeService service(
+        pulse::native::NativeService service(
             pulse::native::readFile(options.pcode),
             pulse::native::readFile(options.programMap),
             options.maxSteps,
             options.storageRoots,
             options.maxFileBytes,
-            options.aggregatorUrl);
+            options.aggregatorUrl,
+            options.librarianUrl,
+            options.ffsRoot,
+            options.signingKey,
+            options.signingKeyId);
+        service.restoreScheduler();
         if (options.debug) {
             service.debugDispatch(std::cin, std::cout);
             return 0;
@@ -455,7 +545,7 @@ int main(int argc, char** argv) {
         std::signal(SIGTERM, requestStop);
         std::cout << "LISTENING service=" << service.serviceId() << " runtime=native host=" << options.host
                   << " port=" << boundPort << std::endl;
-        serve(listener, service, 1048576, options.maxSteps);
+        serve(listener, service, 20000000, options.maxSteps, options.storageRoots.size());
         closeSocket(listener);
         return 0;
     } catch (const std::exception& error) {

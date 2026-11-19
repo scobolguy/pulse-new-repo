@@ -36,6 +36,18 @@ test('remote FFS supports bounded binary, positioned reads/writes and directorie
     });
     assert.equal(emptyCreate, 200);
     assert.equal((await (await fetch(`${base}/stat?path=arduino-empty.bin`)).json()).size, 0);
+    const virtualPath = 'nodes/test/paging/001122334455/.virtual';
+    const virtualWrite = (offset, data) => fetch(
+      `${base}/io?path=${encodeURIComponent(virtualPath)}&offset=${offset}&truncate=false`, {
+        method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: data
+      });
+    assert.deepEqual(await (await virtualWrite(0, Buffer.alloc(0))).json(), { written: 0 });
+    const block = Buffer.from([1, 0, 255, 7]);
+    assert.deepEqual(await (await virtualWrite(1024, block)).json(), { written: block.length });
+    assert.deepEqual(await (await virtualWrite(0, Buffer.alloc(0))).json(), { written: 0 });
+    const virtualRead = await fetch(`${base}/io?path=${encodeURIComponent(virtualPath)}&offset=1024&length=4`);
+    assert.equal(virtualRead.status, 200);
+    assert.deepEqual(Buffer.from(await virtualRead.arrayBuffer()), block);
     let response = await write('offset=0&truncate=true');
     assert.equal(response.status, 200, await response.text());
     const bytes = Buffer.from([0, 255, 128, 13, 10, 42]);

@@ -11,6 +11,9 @@
 #include "config_types.h"
 #include "main_globals.h"
 #include "NodeConfig.h"
+#if defined(ENABLE_PMACHINE) && !defined(PULSE_NETWORK_BOOTSTRAP)
+#include "boot/boot_runtime.h"
+#endif
 
 #if defined(ESP32)
 #include <esp_wifi.h>
@@ -531,6 +534,10 @@ WiFiProvisioning* globalWiFiProvisioning = nullptr;
 
 void registerWiFiProvisioningRoutes(AsyncWebServer& server) {
     server.on("/api/wifi/scan", HTTP_GET, [](AsyncWebServerRequest* request) {
+#if defined(ENABLE_PMACHINE) && !defined(PULSE_NETWORK_BOOTSTRAP)
+        pulse::boot::runtime().handleProvisioningRequest(request);
+        return;
+#endif
         if (!globalWiFiProvisioning) {
             globalWiFiProvisioning = new WiFiProvisioning();
             globalWiFiProvisioning->begin("ESP32-Device");
@@ -571,6 +578,10 @@ void registerWiFiProvisioningRoutes(AsyncWebServer& server) {
     });
 
     server.on("/api/wifi/provision", HTTP_POST, [](AsyncWebServerRequest* request) {
+#if defined(ENABLE_PMACHINE) && !defined(PULSE_NETWORK_BOOTSTRAP)
+        pulse::boot::runtime().handleProvisioningRequest(request);
+        return;
+#endif
         if (!globalWiFiProvisioning) {
             globalWiFiProvisioning = new WiFiProvisioning();
             globalWiFiProvisioning->begin("ESP32-Device");
@@ -658,6 +669,10 @@ void registerWiFiProvisioningRoutes(AsyncWebServer& server) {
     });
 
     server.on("/api/wifi/profiles", HTTP_GET, [](AsyncWebServerRequest* request) {
+#if defined(ENABLE_PMACHINE) && !defined(PULSE_NETWORK_BOOTSTRAP)
+        pulse::boot::runtime().handleProvisioningRequest(request);
+        return;
+#endif
         if (!globalWiFiProvisioning) {
             globalWiFiProvisioning = new WiFiProvisioning();
             globalWiFiProvisioning->begin("ESP32-Device");
@@ -689,6 +704,10 @@ void registerWiFiProvisioningRoutes(AsyncWebServer& server) {
     });
 
     server.on("/api/wifi/profiles", HTTP_DELETE, [](AsyncWebServerRequest* request) {
+#if defined(ENABLE_PMACHINE) && !defined(PULSE_NETWORK_BOOTSTRAP)
+        pulse::boot::runtime().handleProvisioningRequest(request);
+        return;
+#endif
         if (!globalWiFiProvisioning) {
             globalWiFiProvisioning = new WiFiProvisioning();
             globalWiFiProvisioning->begin("ESP32-Device");
@@ -725,11 +744,7 @@ WiFiProvisioning::~WiFiProvisioning() {
 
 bool WiFiProvisioning::begin(const char* name) {
     deviceName = name ? name : "ESP32-Device";
-#if defined(ARDUINO_ARCH_ESP8266)
     if (!LittleFS.begin()) {
-#else
-    if (!LittleFS.begin(true)) {
-#endif
         Serial.println("[WIFI-PROV] LittleFS mount failed");
         return false;
     }
@@ -871,7 +886,9 @@ bool WiFiProvisioning::saveCredentialsList(const std::vector<WiFiCredentials>& c
     File f = LittleFS.open(kCredsPath, "w");
     if (!f) {
         Serial.println("[WIFI-PROV] Credentials file unavailable; using encrypted NVS storage");
-        return saveEncryptedCredentialPayloadToPreferences(plaintext);
+        const bool saved = saveEncryptedCredentialPayloadToPreferences(plaintext);
+        credentialRevision_.fetch_add(1, std::memory_order_release);
+        return saved;
     }
 
     const bool saved = writeEncryptedCredentialPayload(plaintext, f);
@@ -880,6 +897,7 @@ bool WiFiProvisioning::saveCredentialsList(const std::vector<WiFiCredentials>& c
         LittleFS.remove(kCredsPath);
         Serial.println("[WIFI-PROV] Failed to encrypt credentials JSON");
     }
+    credentialRevision_.fetch_add(1, std::memory_order_release);
     return saved;
 #else
     File f = LittleFS.open(kCredsPath, "w");
@@ -890,6 +908,7 @@ bool WiFiProvisioning::saveCredentialsList(const std::vector<WiFiCredentials>& c
 
     f.print(plaintext);
     f.close();
+    credentialRevision_.fetch_add(1, std::memory_order_release);
     return true;
 #endif
 }
@@ -936,6 +955,7 @@ bool WiFiProvisioning::clearCredentials() {
     }
 #endif
     ok = eraseLegacyCredentialStores() && ok;
+    credentialRevision_.fetch_add(1, std::memory_order_release);
     return ok;
 }
 
@@ -993,10 +1013,15 @@ bool WiFiProvisioning::startBLEProvisioning(uint32_t timeout) {
     return false;
 }
 
+bool WiFiProvisioning::saveNodeName(const String& requested, String& applied) {
+    return persistNodeName(requested, &applied);
+}
+
 bool WiFiProvisioning::startWiFiScanner(uint32_t timeout) {
     (void)timeout;
     provMethod = PROV_WIFI_SCANNER;
-    WiFi.mode(WIFI_STA);
+    const auto currentMode = WiFi.getMode();
+    WiFi.mode(currentMode == WIFI_AP || currentMode == WIFI_AP_STA ? WIFI_AP_STA : WIFI_STA);
     WiFi.disconnect(false, false);
     delay(100);
     const int count = WiFi.scanNetworks();
@@ -1015,6 +1040,51 @@ bool WiFiProvisioning::startWPSProvisioning(uint32_t timeout) {
     return false;
 }
 
+bool WiFiProvisioning::beginConnection(const WiFiCredentials& creds) {
+    if (creds.ssid.isEmpty()) {
+        Serial.println("[WIFI-PROV] Cannot start a profile without an SSID");
+        return false;
+    }
+    if (!WiFi.mode(WiFi.getMode() == WIFI_AP_STA || WiFi.getMode() == WIFI_AP ? WIFI_AP_STA : WIFI_STA)) {
+        Serial.println("[WIFI-PROV] Unable to enable Wi-Fi station");
+        return false;
+    }
+    WiFi.setAutoReconnect(false);
+    currentCreds = creds;
+    if (!currentCreds.hostname.isEmpty()) {
+#if defined(ARDUINO_ARCH_ESP8266)
+        WiFi.hostname(currentCreds.hostname.c_str());
+#else
+        WiFi.setHostname(currentCreds.hostname.c_str());
+#endif
+    }
+    WiFi.disconnect();
+    if (currentCreds.dhcp) {
+        if (!WiFi.config(IPAddress(), IPAddress(), IPAddress())) {
+            Serial.println("[WIFI-PROV] Unable to configure DHCP");
+            return false;
+        }
+    } else if (!configureStaticIP(currentCreds)) {
+        Serial.println("[WIFI-PROV] Unable to apply static IP profile");
+        return false;
+    }
+    const bool enterprise = isEnterpriseMode(currentCreds);
+    if (enterprise) {
+        if (!configureEnterpriseAuth(currentCreds)) {
+            Serial.println("[WIFI-PROV] Unable to configure enterprise authentication");
+            return false;
+        }
+    } else disableEnterpriseAuthIfEnabled();
+    const wl_status_t status = enterprise || currentCreds.password.isEmpty()
+        ? WiFi.begin(currentCreds.ssid.c_str())
+        : WiFi.begin(currentCreds.ssid.c_str(), currentCreds.password.c_str());
+    if (status == WL_CONNECT_FAILED) {
+        Serial.println("[WIFI-PROV] Wi-Fi driver rejected the connection attempt");
+        return false;
+    }
+    return true;
+}
+
 bool WiFiProvisioning::connectWiFi(const WiFiCredentials* creds, uint32_t timeout) {
     std::vector<WiFiCredentials> candidates;
     if (creds) {
@@ -1024,52 +1094,11 @@ bool WiFiProvisioning::connectWiFi(const WiFiCredentials* creds, uint32_t timeou
         return false;
     }
 
-    WiFi.mode(WIFI_STA);
-    WiFi.setAutoReconnect(true);
-
     for (size_t i = 0; i < candidates.size(); ++i) {
-        WiFiCredentials profile = candidates[i];
-        if (profile.ssid.isEmpty()) {
-            continue;
-        }
-
-        currentCreds = profile;
-        if (!currentCreds.hostname.isEmpty()) {
-#if defined(ARDUINO_ARCH_ESP8266)
-            WiFi.hostname(currentCreds.hostname.c_str());
-#else
-            WiFi.setHostname(currentCreds.hostname.c_str());
-#endif
-        }
-
-        if (!currentCreds.dhcp) {
-            configureStaticIP(currentCreds);
-        }
-
-        Serial.printf("[WIFI-PROV] Connecting to SSID (%u/%u): %s\n",
+        Serial.printf("[WIFI-PROV] Starting profile %u/%u\n",
                       static_cast<unsigned>(i + 1),
-                      static_cast<unsigned>(candidates.size()),
-                      currentCreds.ssid.c_str());
-
-        const bool enterpriseMode = isEnterpriseMode(currentCreds);
-        if (enterpriseMode) {
-            if (!configureEnterpriseAuth(currentCreds)) {
-                Serial.println("[WIFI-PROV] Enterprise auth setup failed; skipping profile");
-                continue;
-            }
-        } else {
-            disableEnterpriseAuthIfEnabled();
-        }
-
-        WiFi.disconnect();
-        delay(50);
-        if (enterpriseMode) {
-            WiFi.begin(currentCreds.ssid.c_str());
-        } else if (currentCreds.password.length() > 0) {
-            WiFi.begin(currentCreds.ssid.c_str(), currentCreds.password.c_str());
-        } else {
-            WiFi.begin(currentCreds.ssid.c_str());
-        }
+                      static_cast<unsigned>(candidates.size()));
+        if (!beginConnection(candidates[i])) continue;
 
         const unsigned long startMs = millis();
         while (WiFi.status() != WL_CONNECTED) {

@@ -8,6 +8,8 @@ const boundedText = (value, max) => typeof value === 'string' && Buffer.byteLeng
 const fail = message => { throw new Error(message); };
 const compare = (a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b));
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+const deviceFields = device => JSON.stringify([device.name, device.protocol, device.address,
+  device.deviceType, device.port, device.serviceUrl]);
 
 export function isPreExecutionBusy(status, text) {
   if (status !== 503) return false;
@@ -52,14 +54,14 @@ export function createDeviceFederation({
     lastTime = time;
     return time;
   }
-  if (!integer(maxSources, 1, 8) || !integer(maxDevices, 1, 150) ||
+  if (!integer(maxSources, 1, 9) || !integer(maxDevices, 1, 150) ||
       !integer(maxEvidenceBytes, 2048, 524288) || !integer(sourceTimeoutMs, 1, 120000) ||
       !integer(maxSyncAgeMs, 1, 3600000) || !Array.isArray(sources) ||
       sources.length < 1 || sources.length > maxSources ||
       sources.some(source => !source || typeof source !== 'object') ||
       new Set(sources.map(source => source.collectorId)).size !== sources.length) fail('Invalid bounded source membership or limits');
   const states = sources.map(source => {
-    if (!['kasa', 'tuya', 'ssdp', 'pulse'].includes(source.protocol) ||
+    if (!['kasa', 'tuya', 'ssdp', 'pulse', 'onvif'].includes(source.protocol) ||
         typeof source.collectorId !== 'string' || !/^[a-zA-Z0-9_.:-]{1,64}$/.test(source.collectorId)) fail('Invalid source identity');
     const origin = new URL(source.origin);
     if (origin.protocol !== 'http:' || origin.username || origin.password ||
@@ -111,7 +113,8 @@ export function createDeviceFederation({
   }
   async function health(state, signal) {
     const { body: response } = await read(state, `/pmachine/service_host/status?collectorId=${encodeURIComponent(state.config.collectorId)}`, signal, 4096);
-    const daemonId = state.config.protocol === 'pulse' ? 'pulse-node-collector' : `${state.config.protocol}-collector`;
+    const daemonId = state.config.protocol === 'onvif' ? 'tapo-camera-collector'
+      : state.config.protocol === 'pulse' ? 'pulse-node-collector' : `${state.config.protocol}-collector`;
     const daemons = Array.isArray(response.daemons) ? response.daemons : (state.config.protocol === 'pulse'
       ? response.daemonDiagnostics?.map(({ id, failures, lastError }) => ({ id, failures, lastError }))
       : null);
@@ -125,15 +128,27 @@ export function createDeviceFederation({
   }
   function validateRecord(state, record, page) {
     const device = record?.device;
-    const maxTtl = state.config.protocol === 'kasa' ? 360000 : 180000;
+    const onvif = state.config.protocol === 'onvif';
+    const maxTtl = onvif || state.config.protocol === 'kasa' ? 360000 : 180000;
     if (!record || Object.keys(record).sort().join(',') !== 'device,key,observationMs,observationSequence,remainingTTLms' ||
-        !device || Object.keys(device).sort().join(',') !== 'address,deviceType,name,protocol' ||
+        !device || Object.keys(device).sort().join(',') !== (onvif
+          ? 'address,deviceType,name,port,protocol,serviceUrl' : 'address,deviceType,name,protocol') ||
         device.protocol !== state.config.protocol || !boundedText(device.name, 256) ||
         !boundedText(device.deviceType, 64) || net.isIP(device.address) !== 4 ||
         !boundedText(record.key, 256) || !integer(record.observationMs, 0, page.sampledAtMs) ||
         !integer(record.observationSequence, 1, Number.MAX_SAFE_INTEGER) ||
         !integer(record.remainingTTLms, 1, maxTtl) ||
         page.sampledAtMs - record.observationMs + record.remainingTTLms > maxTtl) fail('Invalid typed device/observation schema');
+    if (onvif) {
+      if (typeof device.port !== 'string' || !/^[1-9][0-9]{0,4}$/.test(device.port) ||
+          Number(device.port) > 65535 || !boundedText(device.serviceUrl, 256) ||
+          record.key !== `camera:onvif:${device.address}:${device.port}`) fail('Invalid ONVIF device identity');
+      const url = URL.parse(device.serviceUrl);
+      if (!url || !['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.hash ||
+          url.hostname !== device.address || (url.port || (url.protocol === 'https:' ? '443' : '80')) !== device.port)
+        fail('Invalid ONVIF service URL');
+      return;
+    }
     const keyPattern = device.protocol === 'pulse' ? /^[^\s]{1,256}$/ :
       device.protocol === 'kasa' ? /^kasa:(\d{1,3}\.){3}\d{1,3}$/ :
       device.protocol === 'tuya' ? /^tuya:[a-zA-Z0-9_-]{6,64}$/ :
@@ -153,7 +168,8 @@ export function createDeviceFederation({
         try {
           for (let index = 0; index < 25; index++) {
             const query = new URLSearchParams({ cursor, revision: first?.revision ?? '' });
-            const { body: page, started } = await read(state, `/api/devices/snapshot?${query}`, signal);
+            const snapshotPath = state.config.protocol === 'onvif' ? '/api/cameras/snapshot' : '/api/devices/snapshot';
+            const { body: page, started } = await read(state, `${snapshotPath}?${query}`, signal);
             if (page.version !== 1 || page.collectorId !== state.config.collectorId || page.bootId !== before.bootId ||
                 !/^(0|[1-9][0-9]{0,15})$/.test(page.revision) || String(page.sequence) !== page.revision ||
                 !integer(page.sequence, 0, Number.MAX_SAFE_INTEGER) || !integer(page.sampledAtMs, 0, Number.MAX_SAFE_INTEGER) ||
@@ -169,10 +185,10 @@ export function createDeviceFederation({
               let deadline = firstStarted + record.remainingTTLms;
               const old = state.observations.get(record.key);
               if (state.bootId === page.bootId && old?.observationSequence === record.observationSequence &&
-                  ['name', 'protocol', 'address', 'deviceType'].some(field => old.device[field] !== record.device[field])) fail('Observation changed without a new sequence');
+                  deviceFields(old.device) !== deviceFields(record.device)) fail('Observation changed without a new sequence');
               // Retries/repeated snapshots of the same observation can only shorten its lifetime.
               if (old?.observationSequence === record.observationSequence &&
-                  ['name', 'protocol', 'address', 'deviceType'].every(field => old.device[field] === record.device[field])) deadline = Math.min(deadline, old.deadline);
+                  deviceFields(old.device) === deviceFields(record.device)) deadline = Math.min(deadline, old.deadline);
               if (state.bootId === page.bootId && old && record.observationSequence < old.observationSequence) fail('Stale observation sequence');
               entries.set(record.key, { ...record, deadline });
               if (entries.size > 50) fail('Source capacity exceeded');
@@ -249,8 +265,7 @@ export function createDeviceFederation({
     }
     const records = [...groups].map(([key, evidence]) => {
       evidence.sort((a, b) => compare(a.collectorId, b.collectorId));
-      const meaningful = device => JSON.stringify([device.name, device.address, device.protocol, device.deviceType]);
-      const consistent = new Set(evidence.map(report => meaningful(report.device))).size === 1;
+      const consistent = new Set(evidence.map(report => deviceFields(report.device))).size === 1;
       const naming = resolveName?.(key, evidence[0].device);
       return { key, device: naming?.status === 'resolved' ? { ...evidence[0].device, name: naming.name } : evidence[0].device,
         ...(naming ? { naming } : {}),

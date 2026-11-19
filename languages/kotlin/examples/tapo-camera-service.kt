@@ -14,7 +14,6 @@ fun names(): String {
     var listed = 0
     while (cursor != "" && listed < 10) {
         body = jsonAppendText(body, "names", jsonText(cacheGet("cameras", cursor), "name"))
-        body = jsonAppendText(body, "names", jsonText(cacheGet("cameras", cursor), "address"))
         listed = listed + 1
         last = cursor
         cursor = cacheNext("cameras", cursor)

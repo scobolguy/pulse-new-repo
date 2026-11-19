@@ -1,13 +1,175 @@
 import { createRequire } from 'node:module';
+import { XmlEventReader, xmlEscapeText } from '../../shared/xml/xml-tokenizer.mjs';
 
 const require = createRequire(new URL('../../../aggregator/package.json', import.meta.url));
-const { XMLParser } = require('fast-xml-parser');
 const XML_NAMESPACE = 'http://www.w3.org/XML/1998/namespace';
+const XMLNS_NAMESPACE = 'http://www.w3.org/2000/xmlns/';
 
-function failure(message, status = 400) { return Object.assign(new Error(message), { status }); }
+function failure(message, status = 400, details = {}) {
+  return Object.assign(new Error(message), { status, ...details });
+}
 
-export function createXmlBindings({ maxBytes = 1000000, maxNodes = 20000, maxDepth = 64 } = {}) {
+function validateXmlSource(value, maxBytes, capacityMessage) {
+  if (typeof value !== 'string') throw failure('Expected XML text');
+  const size = Buffer.byteLength(value);
+  if (size > maxBytes) throw failure(capacityMessage, 413);
+  const markup = value.replace(/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>/g, '');
+  if (/<!\s*(?:DOCTYPE|ENTITY)\b/i.test(markup)) throw failure('XML DTD and entity declarations are disabled');
+  if (/&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)[^;\s<]*;/.test(markup)) {
+    throw failure('Unknown XML entity');
+  }
+  const validCharacter = code => code === 9 || code === 10 || code === 13
+    || code >= 32 && code <= 0xd7ff || code >= 0xe000 && code <= 0xfffd || code >= 0x10000 && code <= 0x10ffff;
+  for (const character of value) {
+    if (!validCharacter(character.codePointAt(0))) throw failure('Invalid XML character');
+  }
+  for (const match of markup.matchAll(/&#(x[0-9a-fA-F]+|\d+);/g)) {
+    const code = match[1].startsWith('x') ? Number.parseInt(match[1].slice(1), 16) : Number(match[1]);
+    if (!validCharacter(code)) throw failure('Invalid XML character reference');
+  }
+  return size;
+}
+
+export function createXmlStreamBindings({ maxBytes = 1000000, maxNodes = 20000, maxDepth = 64 } = {}) {
   for (const [name, value] of Object.entries({ maxBytes, maxNodes, maxDepth })) {
+    if (!Number.isSafeInteger(value) || value < 1) throw failure(`Invalid XML stream limit: ${name}`);
+  }
+  const streams = new Map();
+  let nextHandle = 1;
+
+  function getStream(handle) {
+    const state = streams.get(handle);
+    if (!state) throw failure('Invalid XML stream handle');
+    return state;
+  }
+
+  function nextSerializedEvent(handle, state) {
+    try {
+      feedUntilEvent(state);
+    } catch (error) {
+      streams.delete(handle);
+      if (!error.xmlDiagnostic) {
+        throw failure(error.message, error.status || 400, {
+          ...state.reader.location(), xmlDiagnostic: true
+        });
+      }
+      throw error;
+    }
+    if (state.events.length) return JSON.stringify(state.events.shift());
+    streams.delete(handle);
+    return '';
+  }
+
+  function addRecordValue(values, key, value) {
+    if (!key) return;
+    if (!Object.hasOwn(values, key)) values[key] = value;
+    else if (Array.isArray(values[key])) values[key].push(value);
+    else values[key] = [values[key], value];
+  }
+
+  function feedUntilEvent(state) {
+    while (!state.events.length && !state.finished) {
+      const event = state.reader.next();
+      if (event) state.events.push(event);
+      else state.finished = true;
+    }
+  }
+
+  return {
+    'host.xml_stream_open': (
+      value, recordPath = '', headerPath = '', expectedNamespace = '', allowedPathsText = '[]'
+    ) => {
+      if (streams.size >= 8) throw failure('XML stream capacity exceeded', 413);
+      let allowedPaths;
+      try { allowedPaths = JSON.parse(allowedPathsText); }
+      catch { throw failure('Invalid XML stream path manifest'); }
+      if (!Array.isArray(allowedPaths) || allowedPaths.some(path => typeof path !== 'string')
+        || (recordPath && (!headerPath || !expectedNamespace || !allowedPaths.includes(recordPath)
+          || !allowedPaths.includes(headerPath)))) {
+        throw failure('Invalid XML stream record configuration');
+      }
+      const state = {
+        events: [], finished: false,
+        recordPath, headerPath, expectedNamespace, allowedPaths: new Set(allowedPaths),
+        capture: null, headerValues: null,
+        reader: new XmlEventReader(value, { maxBytes, maxNodes, maxDepth })
+      };
+      const handle = nextHandle++;
+      streams.set(handle, state);
+      return handle;
+    },
+    'host.xml_stream_next': handle => {
+      const state = getStream(handle);
+      return nextSerializedEvent(handle, state);
+    },
+    'host.xml_stream_next_record': handle => {
+      const state = getStream(handle);
+      if (!state.recordPath) throw failure('XML stream has no record configuration');
+      let serialized;
+      while ((serialized = nextSerializedEvent(handle, state)) !== '') {
+        const event = JSON.parse(serialized);
+        if (event.kind === 'start') {
+          const location = { ...state.reader.location(), xmlDiagnostic: true };
+          if (event.namespace !== state.expectedNamespace) {
+            throw failure('Unexpected XML namespace', 400, location);
+          }
+          if (!state.allowedPaths.has(event.path)) {
+            throw failure(`Element is not declared in the XML profile: ${event.path}`, 400, location);
+          }
+          if (event.path === state.headerPath) {
+            if (state.headerValues) throw failure('Duplicate XML group header', 400, location);
+            state.capture = { mode: 'header', boundaryPath: state.headerPath, values: {}, frames: [] };
+          } else if (event.path === state.recordPath) {
+            if (state.capture || !state.headerValues) {
+              throw failure('Transaction record is out of sequence', 400, location);
+            }
+            state.capture = { mode: 'transaction', boundaryPath: state.recordPath, values: {}, frames: [] };
+          }
+          if (state.capture) {
+            const capture = state.capture;
+            if (capture.frames.length) capture.frames[capture.frames.length - 1].hasChild = true;
+            const relativePath = event.path === capture.boundaryPath
+              ? '' : event.path.slice(capture.boundaryPath.length + 1).replaceAll('/', '.');
+            const frame = { path: event.path, relativePath, text: '', hasChild: false };
+            for (const [name, value] of Object.entries(event.attributes || {})) {
+              addRecordValue(capture.values, `${relativePath}.${name}`, value);
+            }
+            capture.frames.push(frame);
+          }
+        } else if (event.kind === 'text' && state.capture && state.capture.frames.length) {
+          state.capture.frames[state.capture.frames.length - 1].text += event.text;
+        } else if (event.kind === 'end' && state.capture && state.capture.frames.length) {
+          const capture = state.capture;
+          const frame = capture.frames.pop();
+          if (!frame.hasChild && frame.relativePath) {
+            addRecordValue(capture.values, frame.relativePath, frame.text);
+          }
+          if (event.path === capture.boundaryPath) {
+            state.capture = null;
+            if (capture.mode === 'header') state.headerValues = capture.values;
+            else return JSON.stringify({
+              headerValues: state.headerValues,
+              transactionValues: capture.values,
+              ...Object.fromEntries(Object.entries(state.reader.location())
+                .map(([name, value]) => [name, String(value)]))
+            });
+          }
+        }
+      }
+      return '';
+    },
+    'host.xml_stream_close': handle => {
+      streams.delete(handle);
+      return 1;
+    },
+    'host.xml_escape_text': xmlEscapeText,
+  };
+}
+
+export function createXmlBindings({
+  maxBytes = 1000000, maxNodes = 20000, maxDepth = 64, streamMaxNodes = maxNodes
+} = {}) {
+  for (const [name, value] of Object.entries({ maxBytes, maxNodes, maxDepth, streamMaxNodes })) {
     if (!Number.isSafeInteger(value) || value < 1) throw failure(`Invalid XML limit: ${name}`);
   }
   const documents = new Map();
@@ -35,25 +197,14 @@ export function createXmlBindings({ maxBytes = 1000000, maxNodes = 20000, maxDep
       ? namespaces[parts[0]] : attribute ? '' : namespaces[''] || '' };
   }
   return {
+    ...createXmlStreamBindings({ maxBytes, maxNodes: streamMaxNodes, maxDepth }),
     'host.xml_parse': value => {
       if (typeof value !== 'string') throw failure('Expected XML text');
       const size = Buffer.byteLength(value);
       if (size + bytesHeld > maxBytes || documents.size >= 8) throw failure('XML document capacity exceeded', 413);
       // No DTDs or custom entities: never consult external resources or expand user entities.
-      const markup = value.replace(/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>/g, '');
-      if (/<!\s*(?:DOCTYPE|ENTITY)\b/i.test(markup)) throw failure('XML DTD and entity declarations are disabled');
-      if (/&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)[^;\s<]*;/.test(markup)) {
-        throw failure('Unknown XML entity');
-      }
-      const validCharacter = code => code === 9 || code === 10 || code === 13
-        || code >= 32 && code <= 0xd7ff || code >= 0xe000 && code <= 0xfffd || code >= 0x10000 && code <= 0x10ffff;
-      for (const character of value) {
-        if (!validCharacter(character.codePointAt(0))) throw failure('Invalid XML character');
-      }
-      for (const match of markup.matchAll(/&#(x[0-9a-fA-F]+|\d+);/g)) {
-        const code = match[1].startsWith('x') ? Number.parseInt(match[1].slice(1), 16) : Number(match[1]);
-        if (!validCharacter(code)) throw failure('Invalid XML character reference');
-      }
+      validateXmlSource(value, maxBytes - bytesHeld, 'XML document capacity exceeded');
+      const { XMLParser } = require('fast-xml-parser');
       const parser = new XMLParser({
         preserveOrder: true, ignoreAttributes: false, attributeNamePrefix: '',
         parseTagValue: false, parseAttributeValue: false, trimValues: false,

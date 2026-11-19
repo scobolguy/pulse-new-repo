@@ -79,6 +79,10 @@ try {
   assert.deepEqual(JSON.parse(health.text), { probe: true });
   const state = JSON.parse((await request('/pmachine/service_host/status')).text);
   assert.equal(state.instructionStorage, 'ffs-paged');
+  const hashInPsram = state.instructionCacheStorage === 'psram';
+  assert.ok(hashInPsram ? state.instructionHashStorage === 'psram'
+    : ['ffs-sd', 'ffs-remote'].includes(state.instructionHashStorage), JSON.stringify(state));
+  assert.equal(state.instructionHashBytes, Math.ceil(Buffer.byteLength(image) / 512) * (hashInPsram ? 32 : 64));
   assert.equal(state.executionModel, 'single-worker');
   assert.equal(state.httpEventCapacity, 3);
   assert.ok(state.instructionPageReads > 4);

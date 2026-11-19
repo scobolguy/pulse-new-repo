@@ -1,0 +1,11 @@
+{
+  "id": "Linker",
+  "version": "1.0.0",
+  "description": "Portable P-code static and on-demand linker and execution resource overlays.",
+  "source": "Linker.pas",
+  "dependencies": ["PortableCodecs"],
+  "provides": {
+    "types": [],
+    "functions": ["Linker_Init", "Linker_Link", "Linker_Resolve", "Linker_BindResources", "Linker_Resource"]
+  }
+}

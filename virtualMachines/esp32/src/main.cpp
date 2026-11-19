@@ -55,6 +55,20 @@ bool waitsForHeap() {
     const char* name = pcTaskGetTaskName(nullptr);
     return name && (!strcmp(name, "async_tcp") || !strcmp(name, "tiT"));
 }
+
+void logMemorySnapshot(const char* stage) {
+    const size_t internalFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const size_t largestInternal = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const size_t psramFree = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const size_t largestPsram = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    Serial.printf("[MEMORY] stage=%s uptime_ms=%lu internal_free=%lu internal_largest=%lu psram_free=%lu psram_largest=%lu\n",
+        stage,
+        static_cast<unsigned long>(millis()),
+        static_cast<unsigned long>(internalFree),
+        static_cast<unsigned long>(largestInternal),
+        static_cast<unsigned long>(psramFree),
+        static_cast<unsigned long>(largestPsram));
+}
 }  // namespace
 
 void* operator new(size_t size) {
@@ -103,6 +117,10 @@ void* operator new[](size_t size) { return operator new(size); }
 #include "pmachine.h"
 #include "pmachine_routes.h"
 #include "DeviceDriverTemplate.h"
+#include "boot/boot_runtime.h"
+#if defined(PULSE_OTA_AB_BOOT)
+#include "boot/ota_storage.h"
+#endif
 
 bool pmachineInvokeFsm(
     const pmachine::FsmCallRequest& request,
@@ -203,11 +221,6 @@ bool ensureLittleFsInitialized() {
     }
 #else
     if (LittleFS.begin()) {
-        gLittleFsInitialized = true;
-        return true;
-    }
-    // Retry with format to recover uninitialized/corrupt local FS on ESP32.
-    if (LittleFS.begin(true)) {
         gLittleFsInitialized = true;
         return true;
     }
@@ -2077,7 +2090,19 @@ void setupWebServer() {
     server.on("/status", HTTP_GET, [](AsyncWebServerRequest *request){
         const uint32_t freeHeap = ESP.getFreeHeap();
         if (freeHeap < 70000) {
-            char fallback[256];
+            char fallback[384];
+#if defined(ESP32)
+            snprintf(
+                fallback,
+                sizeof(fallback),
+                "{\"status\":\"degraded\",\"error\":\"low_heap\",\"freeHeap\":%lu,\"largestInternalBlock\":%lu,\"freePsram\":%lu,\"largestPsramBlock\":%lu,\"nodeName\":\"%s\",\"ip\":\"%s\"}",
+                static_cast<unsigned long>(freeHeap),
+                static_cast<unsigned long>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+                static_cast<unsigned long>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
+                static_cast<unsigned long>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
+                nodeName.c_str(),
+                WiFi.localIP().toString().c_str());
+#else
             snprintf(
                 fallback,
                 sizeof(fallback),
@@ -2085,6 +2110,7 @@ void setupWebServer() {
                 static_cast<unsigned long>(freeHeap),
                 nodeName.c_str(),
                 WiFi.localIP().toString().c_str());
+#endif
             request->send(200, "application/json", fallback);
             return;
         }
@@ -2094,7 +2120,19 @@ void setupWebServer() {
         String json;
         const size_t reserveBytes = 2200 + (std::min(discoveredNodeTable.size(), maxDiscoveredNodesInStatus) * estimatedNodeBytes);
         if (!json.reserve(reserveBytes)) {
-            char fallback[256];
+            char fallback[384];
+#if defined(ESP32)
+            snprintf(
+                fallback,
+                sizeof(fallback),
+                "{\"status\":\"degraded\",\"error\":\"reserve_failed\",\"freeHeap\":%lu,\"largestInternalBlock\":%lu,\"freePsram\":%lu,\"largestPsramBlock\":%lu,\"nodeName\":\"%s\",\"ip\":\"%s\"}",
+                static_cast<unsigned long>(ESP.getFreeHeap()),
+                static_cast<unsigned long>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+                static_cast<unsigned long>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
+                static_cast<unsigned long>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)),
+                nodeName.c_str(),
+                WiFi.localIP().toString().c_str());
+#else
             snprintf(
                 fallback,
                 sizeof(fallback),
@@ -2102,11 +2140,19 @@ void setupWebServer() {
                 static_cast<unsigned long>(ESP.getFreeHeap()),
                 nodeName.c_str(),
                 WiFi.localIP().toString().c_str());
+#endif
             request->send(200, "application/json", fallback);
             return;
         }
 
         json = "{";
+        json += "\"status\":\"ok\",";
+        json += "\"freeHeap\":" + String(static_cast<unsigned long>(freeHeap)) + ",";
+#if defined(ESP32)
+        json += "\"largestInternalBlock\":" + String(static_cast<unsigned long>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT))) + ",";
+        json += "\"freePsram\":" + String(static_cast<unsigned long>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT))) + ",";
+        json += "\"largestPsramBlock\":" + String(static_cast<unsigned long>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT))) + ",";
+#endif
         #if defined(ESP32)
             File dir = LittleFS.open("/devices", "r");
         #elif defined(ESP8266)
@@ -2375,8 +2421,13 @@ void setupWebServer() {
     server.on("/BRConnect", HTTP_GET, serveBtConnectPage);
 
     server.on("/web/provisioning.html", HTTP_GET, [](AsyncWebServerRequest *request) {
-        if (LittleFS.exists("/web/provisioning.html")) {
-            request->send(LittleFS, "/web/provisioning.html", "text/html");
+#if defined(ENABLE_PMACHINE) && defined(PULSE_OTA_AB_BOOT)
+        fs::FS& provisionFiles = pulse::ota::bootFileSystem();
+#else
+        fs::FS& provisionFiles = LittleFS;
+#endif
+        if (provisionFiles.exists("/web/provisioning.html")) {
+            request->send(provisionFiles, "/web/provisioning.html", "text/html");
             return;
         }
         request->send(404, "text/plain", "Missing /web/provisioning.html on LittleFS. Upload data/ first.");
@@ -2635,6 +2686,12 @@ void setupWebServer() {
         doc["configuredUrl"] = ffsRemoteConfigured;
         doc["candidateUrl"] = ffsRemoteCandidate;
         doc["available"] = ffsUp;
+#if defined(PULSE_NETWORK_BOOTSTRAP)
+        const auto paging = federatedFS.pagingBackend();
+        doc["pagingBackend"] = paging == FFSBackend::SD ? "sd"
+            : paging == FFSBackend::Remote ? "remote" : "unavailable";
+        doc["writablePagingReady"] = federatedFS.writablePagingReady();
+#endif
         String body;
         serializeJson(doc, body);
         request->send(200, "application/json", body);
@@ -2659,6 +2716,16 @@ void setupWebServer() {
             return;
         }
         String url = String("http://") + ip.toString() + ":" + String(port);
+#if defined(PULSE_NETWORK_BOOTSTRAP)
+        if (request->hasParam("path", true)) {
+            const String path = request->getParam("path", true)->value();
+            if (path != "/api/fileserver") {
+                request->send(400, "text/plain", "Supported file server path: /api/fileserver");
+                return;
+            }
+            url += path;
+        }
+#endif
         Preferences preferences;
         if (!preferences.begin("pulse-ffs", false)) {
             Serial.println("[FFS] Unable to open direct remote storage configuration");
@@ -2679,9 +2746,10 @@ void setupWebServer() {
 #ifdef ENABLE_PMACHINE
 #ifndef DISABLE_PMACHINE_ROUTES
     registerPMachineRoutes(server, pm, &federatedFS);
-    if (!runPMachineFixedBoot(pm, &federatedFS))
-        Serial.println("[PMACHINE] Fixed boot unavailable; entering recovery mode");
 #endif
+#endif
+#if defined(ENABLE_PMACHINE) && defined(PULSE_OTA_AB_BOOT)
+    pulse::ota::registerRoutes(server);
 #endif
     server.onNotFound(notFound);
     
@@ -2751,6 +2819,7 @@ uint8_t consecutiveWifiConnectFailures = 0;
 bool wifiProvisioningModeActive = false;
 
 bool startWifiProvisioningAccessPoint() {
+    if (wifiProvisioningModeActive) return true;
     String ssidBase = nodeName.length() ? nodeName : String("ESP32");
     ssidBase.replace(" ", "-");
     String apName = String("Pulse-") + ssidBase + "-Provision";
@@ -2770,6 +2839,54 @@ bool startWifiProvisioningAccessPoint() {
     Serial.printf("[WIFI-PROV] AP IP: %s\n", WiFi.softAPIP().toString().c_str());
     return true;
 }
+
+#ifdef ENABLE_PMACHINE
+bool stopWifiProvisioningAccessPoint() {
+    if (!wifiProvisioningModeActive) return true;
+    if (WiFi.status() != WL_CONNECTED || !WiFi.softAPdisconnect(true)) {
+        Serial.println("[WIFI-PROV] Unable to stop provisioning AP");
+        return false;
+    }
+    wifiProvisioningModeActive = false;
+    return true;
+}
+
+bool startBootFfs(int backend) {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[FFS] Refusing initialization before network connection");
+        return false;
+    }
+    if (ffsUp) return true;
+    if (backend == 0) {
+#if defined(ESP32)
+        ffsUp = SD.begin() && federatedFS.begin(FFSBackend::SD, SD);
+#endif
+    } else if (backend == 1) {
+        ffsUp = federatedFS.begin(FFSBackend::Flash, LittleFS);
+    } else if (backend == 2 && ffsRemoteCandidate.length()) {
+        String storageNode = nodeName;
+        storageNode.toLowerCase();
+        for (size_t i = 0; i < storageNode.length(); ++i) {
+            const char c = storageNode[i];
+            if (!isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '_' && c != '.')
+                storageNode.setCharAt(i, '-');
+        }
+        ffsUp = federatedFS.beginRemote(ffsRemoteCandidate, "/nodes/" + storageNode + "/public");
+    }
+    if (!ffsUp) {
+        Serial.printf("[FFS] Backend %d unavailable\n", backend);
+        return false;
+    }
+    Serial.printf("[FFS] Backend %d ready\n", backend);
+    pm.setFFS(&federatedFS);
+#if defined(ESP32) && !defined(DISABLE_PMACHINE_ROUTES)
+#if !defined(PULSE_NETWORK_BOOTSTRAP)
+    configurePMachineHostedStorage(federatedFS);
+#endif
+#endif
+    return true;
+}
+#endif
 
 #if 0 // UDP announcement and discovery disabled
 #define ANNOUNCE_PORT 4210
@@ -3055,38 +3172,29 @@ void setup() {
     Serial.begin(115200);
     delay(100);
     Serial.println("[BOOT] setup() starting...");
+#if defined(ESP32)
+    logMemorySnapshot("setup-entry");
+#endif
     if (!initializeGpioPinSemaphores()) {
         Serial.println("[BOOT] GPIO coordination initialization failed");
         while (1) delay(1000);
     }
 
-    // 1. Probe SD. Legacy device configuration still has its own local storage.
-#if defined(ESP32)
-    bool sdAvailable = false;
-    if (SD.begin()) {
-        Serial.println("SD card detected and mounted");
-        sdAvailable = true;
-    } else {
-        Serial.println("No SD card detected; FFS will look for remote storage");
-    }
-    if (!sdAvailable) {
-        if (!ensureLittleFsInitialized()) {
-            Serial.println("LittleFS mount failed");
-            while (1) delay(1000);
-        }
-    }
-#else
     if (!ensureLittleFsInitialized()) {
-        Serial.println("LittleFS mount failed");
+        Serial.println("[BOOT] LittleFS mount failed; local recovery/reflash required");
         while (1) delay(1000);
     }
+#if defined(ESP32)
+    logMemorySnapshot("littlefs-mounted");
 #endif
-
-#if defined(ESP32)
-    if (!ensureLittleFsInitialized()) {
-        Serial.println("LittleFS unavailable");
+#if defined(ENABLE_PMACHINE) && defined(PULSE_OTA_AB_BOOT)
+    if (!pulse::ota::begin()) {
+        Serial.println("[BOOT] OTA boot filesystem unavailable; recovery/reflash required");
         while (1) delay(1000);
     }
+#if defined(ESP32)
+    logMemorySnapshot("bootfs-mounted");
+#endif
 #endif
 
     // Load persisted node identity early so provisioning AP/hostname can use it.
@@ -3104,19 +3212,59 @@ void setup() {
         }
     }
 
-    // 2. WiFi connection logic
-    Serial.println("[BOOT] Connecting to WiFi...");
     WiFi.mode(WIFI_STA);
-    WiFi.setAutoReconnect(true);
+    WiFi.setAutoReconnect(false);
     WiFi.persistent(false);
-    WiFi.disconnect(true, true);
-    delay(50);
+    WiFi.disconnect();
 
     initializeWiFiProvisioning(nodeName.c_str());
     if (globalWiFiProvisioning) {
         globalWiFiProvisioning->eraseLegacyCredentialStores();
     }
+#if defined(ESP32)
+    logMemorySnapshot("provisioning-initialized");
+#endif
 
+#ifdef ENABLE_PMACHINE
+#if defined(ESP32)
+    {
+        Preferences preferences;
+        if (preferences.begin("pulse-ffs", true)) {
+            ffsRemoteConfigured = preferences.getString("url", "");
+            preferences.end();
+            ffsRemoteCandidate = ffsRemoteConfigured;
+        } else Serial.println("[FFS] No direct remote storage configuration");
+    }
+#endif
+#endif
+#if defined(ENABLE_PMACHINE) && !defined(PULSE_NETWORK_BOOTSTRAP)
+    const pulse::boot::Hardware bootHardware{
+        startWifiProvisioningAccessPoint, stopWifiProvisioningAccessPoint,
+        [] { return wifiProvisioningModeActive; },
+        [] { return ffsUp && WiFi.status() == WL_CONNECTED; },
+        startBootFfs,
+        [] { return ffsRemoteConfigured.length() > 0; },
+        [] { return ffsRemoteCandidate.length() > 0; }
+    };
+#if defined(PULSE_OTA_AB_BOOT)
+    fs::FS& bootFiles = pulse::ota::bootFileSystem();
+#else
+    fs::FS& bootFiles = LittleFS;
+#endif
+    if (!globalWiFiProvisioning
+        || !pulse::boot::runtime().begin(bootFiles, *globalWiFiProvisioning, bootHardware)) {
+        Serial.printf("[BOOT] Cannot start supervisor: %s\n", pulse::boot::runtime().error().c_str());
+#if defined(PULSE_OTA_AB_BOOT)
+        if (!pulse::ota::rejectBoot(pulse::boot::runtime().error().c_str()))
+            Serial.printf("[OTA] Boot rejection failed: %s\n", pulse::ota::lastError());
+#endif
+        while (1) delay(1000);
+    }
+    pulse::boot::runtime().poll();
+#if defined(ESP32)
+    logMemorySnapshot("supervisor-started");
+#endif
+#else
     bool connected = false;
     if (globalWiFiProvisioning) {
         connected = globalWiFiProvisioning->connectWiFi(nullptr, 12);
@@ -3126,6 +3274,7 @@ void setup() {
         }
     }
 
+#if !defined(PULSE_NETWORK_BOOTSTRAP)
     if (!connected && wifiConfig.ssid.length() > 0) {
         Serial.println("[BOOT] Falling back to in-memory wifiConfig credentials");
         WiFi.begin(wifiConfig.ssid.c_str(), wifiConfig.password.c_str());
@@ -3137,6 +3286,7 @@ void setup() {
             retries++;
         }
     }
+#endif
 
     Serial.println();
     if (WiFi.status() == WL_CONNECTED) {
@@ -3146,6 +3296,7 @@ void setup() {
         Serial.println("[BOOT] WiFi connection failed (no usable provisioned profile)");
         startWifiProvisioningAccessPoint();
     }
+#endif
 
     // 3. Ensure /devices, /services, and /flows directories exist at root at boot
     File root = LittleFS.open("/", "r");
@@ -3221,7 +3372,9 @@ void setup() {
     // 6. Set hostname, start UDP, and announce presence (must be after WiFi is up and nodeName is set)
     WiFi.setHostname(nodeName.c_str());
     startOrRefreshMdns(nodeName);
-    Serial.println("[OTA] Removed: use serial firmware upload + FFS file upload for delivery");
+#if !defined(PULSE_OTA_AB_BOOT)
+    Serial.println("[OTA] A/B updates require an OTA-enabled firmware profile");
+#endif
     configureSupervisorTargets();
     loadSupervisorConfig();
     if (isSupervisorRole()) {
@@ -3240,13 +3393,19 @@ void setup() {
 
 #ifdef ENABLE_TIME_AUTHORITY
     timeAuthorityBegin(nodeName);
+#if defined(ESP32)
+    logMemorySnapshot("time-authority-started");
+#endif
 #endif
 
 #ifndef DISABLE_UNIQUE_ID_SERVICE
     uniqueIdBegin(nodeName);
+#if defined(ESP32)
+    logMemorySnapshot("unique-id-started");
+#endif
 #endif
 
-    // Prefer SD; an explicit remote endpoint takes precedence over discovery.
+#ifndef ENABLE_PMACHINE
 #if defined(ESP32)
     {
         Preferences preferences;
@@ -3256,7 +3415,7 @@ void setup() {
             ffsRemoteCandidate = ffsRemoteConfigured;
         } else Serial.println("[FFS] Unable to load direct remote storage configuration");
     }
-    if (sdAvailable) {
+    if (WiFi.status() == WL_CONNECTED && SD.begin()) {
         ffsUp = federatedFS.begin(FFSBackend::SD, SD);
         if (ffsUp) {
             Serial.println("FederatedFileSystem is UP (SD backend)");
@@ -3265,7 +3424,7 @@ void setup() {
         }
     }
 #endif
-    if (!ffsUp) {
+    if (!ffsUp && WiFi.status() == WL_CONNECTED) {
         if (LittleFS.begin()) {
             ffsUp = federatedFS.begin(FFSBackend::Flash, LittleFS);
             if (ffsUp) Serial.println("FederatedFileSystem is UP (LittleFS flash backend)");
@@ -3274,9 +3433,9 @@ void setup() {
             Serial.println("[FFS] LittleFS mount failed; searching for remote FFS");
         }
     }
+#endif
 
 #ifdef ENABLE_PMACHINE
-    pm.setFFS(&federatedFS);
     pm.setFsmCallHook(pmachineInvokeFsm, nullptr);
 #endif
 
@@ -3553,11 +3712,18 @@ void setup() {
 
     // 8. Web server for node name config (Async)
     setupWebServer();
-#if defined(ESP32) && defined(ENABLE_PMACHINE) && !defined(DISABLE_PMACHINE_ROUTES)
+#if defined(ESP32)
+    logMemorySnapshot("web-server-started");
+#endif
+#if defined(ESP32) && defined(ENABLE_PMACHINE) && !defined(DISABLE_PMACHINE_ROUTES) \
+    && !defined(PULSE_NETWORK_BOOTSTRAP)
     if (ffsUp) configurePMachineHostedStorage(federatedFS);
 #endif
 #if defined(ENABLE_HTTPS) && (defined(ESP32) || defined(ESP8266))
     startHttpsService();
+#if defined(ESP32)
+    logMemorySnapshot("https-startup");
+#endif
 #endif
 #if defined(ESP32) && !defined(DISABLE_BONECRUSHER)
     startEsp32GatewayWorkerTaskIfNeeded();
@@ -3567,10 +3733,56 @@ void setup() {
 
 void loop() {
     serialProvisioningPoll();
+#if defined(ENABLE_PMACHINE) && !defined(PULSE_NETWORK_BOOTSTRAP)
+    const bool bootHealthy = pulse::boot::runtime().poll();
+#ifndef DISABLE_PMACHINE_ROUTES
+    setPMachineBootStatus(bootHealthy, bootHealthy ? "LittleFS supervisor running"
+        : pulse::boot::runtime().error().empty() ? "LittleFS supervisor connecting/provisioning"
+        : pulse::boot::runtime().error().c_str());
+    if (bootHealthy) pollPMachineSlotScheduler();
+#endif
+#if defined(PULSE_OTA_AB_BOOT)
+    static unsigned long lastOtaBootCheck = millis() - 1000;
+    static String lastOtaBootError;
+    const unsigned long otaNow = millis();
+    if (otaNow - lastOtaBootCheck >= 1000) {
+        lastOtaBootCheck = otaNow;
+        bool handled = true;
+        if (bootHealthy) handled = pulse::ota::confirmBoot();
+        else if (!pulse::boot::runtime().error().empty())
+            handled = pulse::ota::rejectBoot(pulse::boot::runtime().error().c_str());
+        if (!handled) {
+            const String error = pulse::ota::lastError();
+            if (error != lastOtaBootError)
+                Serial.printf("[OTA] Boot decision failed; retrying: %s\n", error.c_str());
+            lastOtaBootError = error;
+        } else lastOtaBootError = "";
+    }
+#endif
+#endif
 #if defined(ENABLE_HTTPS) && defined(ESP32)
     pollTlsEnrollment();
 #endif
 
+#if defined(ESP32)
+    static bool loggedWifiMemory = false;
+    static bool loggedFfsMemory = false;
+    static bool loggedBeaconMemory = false;
+    if (!loggedWifiMemory && WiFi.status() == WL_CONNECTED) {
+        logMemorySnapshot("wifi-connected");
+        loggedWifiMemory = true;
+    }
+    if (!loggedFfsMemory && ffsUp) {
+        logMemorySnapshot("ffs-ready");
+        loggedFfsMemory = true;
+    }
+    if (!loggedBeaconMemory && udpRuntimeGetBeaconLastSentAt() != 0) {
+        logMemorySnapshot("first-beacon");
+        loggedBeaconMemory = true;
+    }
+#endif
+
+#if !defined(ENABLE_PMACHINE) || defined(PULSE_NETWORK_BOOTSTRAP)
     if (WiFi.status() == WL_CONNECTED) {
         consecutiveWifiConnectFailures = 0;
     } else if (!wifiProvisioningModeActive && globalWiFiProvisioning) {
@@ -3596,12 +3808,19 @@ void loop() {
             }
         }
     }
+#endif
 
     if (WiFi.status() == WL_CONNECTED) {
         startOrRefreshMdns(nodeName);
     }
 
-    udpRuntimeMaintainConnectivity(runtimeUdpParentPort, runtimeUdpSiblingPort, WIFI_RECONNECT_INTERVAL);
+    udpRuntimeMaintainConnectivity(runtimeUdpParentPort, runtimeUdpSiblingPort, WIFI_RECONNECT_INTERVAL,
+#ifdef ENABLE_PMACHINE
+                                  false
+#else
+                                  true
+#endif
+    );
 
 #ifdef ENABLE_TIME_AUTHORITY
     timeAuthorityLoop();
@@ -3656,14 +3875,51 @@ void loop() {
 #if defined(ENABLE_PMACHINE) && !defined(DISABLE_PMACHINE_ROUTES)
         pmachineLearnAggregator(aggregatorId, address, httpPort);
 #endif
-        if (!ffsUp && ffsRemoteConfigured.isEmpty()) {
+        if (ffsRemoteConfigured.isEmpty()) {
             ffsRemoteCandidate = String("http://") + address + ":" + String(httpPort) + "/api/fileserver";
         }
     };
 #endif
     udpRuntimeProcessIncoming(udpContext, runtimeUdpParentPort, runtimeUdpSiblingPort);
+#if defined(PULSE_NETWORK_BOOTSTRAP)
+    if (!ffsUp && WiFi.status() == WL_CONNECTED) {
+        static unsigned long lastFfsStart = millis() - 15000;
+        if (millis() - lastFfsStart >= 15000) {
+            lastFfsStart = millis();
+            if (!startBootFfs(0) && !startBootFfs(1) && ffsRemoteCandidate.length()) {
+                startBootFfs(2);
+            }
+        }
+    }
+#endif
 #if defined(ESP32)
-    if (!ffsUp && ffsRemoteCandidate.length()
+    if (ffsUp && !psramFound() && !federatedFS.writablePagingReady()
+        && WiFi.status() == WL_CONNECTED && ffsRemoteCandidate.length()
+        && static_cast<unsigned long>(millis() - ffsLastRemoteProbe) >= 15000) {
+        ffsLastRemoteProbe = millis();
+        String storageNode = nodeName;
+        storageNode.toLowerCase();
+        for (size_t i = 0; i < storageNode.length(); ++i) {
+            const char c = storageNode[i];
+            if (!isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '_' && c != '.')
+                storageNode.setCharAt(i, '-');
+        }
+        String deviceId = WiFi.macAddress();
+        deviceId.replace(":", "");
+        deviceId.toLowerCase();
+        federatedFS.beginPagingRemote(ffsRemoteCandidate, "/nodes/" + storageNode + "/paging", deviceId);
+    }
+#if defined(PULSE_NETWORK_BOOTSTRAP) && !defined(DISABLE_PMACHINE_ROUTES)
+    static bool hostedStorageConfigured = false;
+    if (!hostedStorageConfigured && WiFi.status() == WL_CONNECTED && ffsUp
+        && federatedFS.writablePagingReady()) {
+        configurePMachineHostedStorage(federatedFS);
+        hostedStorageConfigured = true;
+    }
+    pollPMachineHostedLoop();
+#endif
+#ifndef ENABLE_PMACHINE
+    if (!ffsUp && WiFi.status() == WL_CONNECTED && ffsRemoteCandidate.length()
         && static_cast<unsigned long>(millis() - ffsLastRemoteProbe) >= 15000) {
         ffsLastRemoteProbe = millis();
         String storageNode = nodeName;
@@ -3680,6 +3936,7 @@ void loop() {
 #endif
         } else Serial.println("[FFS] Remote storage unavailable; retrying discovery");
     }
+#endif
 #endif
         /* UDP announcement disabled */
         // processIncomingUDP();

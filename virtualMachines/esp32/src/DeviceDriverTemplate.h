@@ -945,6 +945,10 @@ public:
             return 0;
         }
         GpioPinSemaphore pinSemaphore(pin);
+        if (!pinSemaphore.ready()) {
+            error = "GPIO lock unavailable";
+            return 0;
+        }
         if (!pinSemaphore.acquired()) {
             error = "GPIO pin is busy";
             return 0;
@@ -994,6 +998,10 @@ public:
             return false;
         }
         GpioPinSemaphore pinSemaphore(descriptor->second.pin);
+        if (!pinSemaphore.ready()) {
+            error = "GPIO lock unavailable";
+            return false;
+        }
         if (!pinSemaphore.acquired()) {
             error = "GPIO pin is busy";
             return false;

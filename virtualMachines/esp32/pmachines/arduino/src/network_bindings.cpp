@@ -6,12 +6,23 @@
 #include <WiFiClient.h>
 #include <WiFiUdp.h>
 #include <algorithm>
+#include <cerrno>
+#include <esp_heap_caps.h>
+#include <lwip/sockets.h>
 #include <mbedtls/aes.h>
 #include <mbedtls/gcm.h>
 
 namespace pmachine {
 namespace {
 constexpr size_t BYTE_LIMIT = 4096;
+constexpr uint32_t ONVIF_HEAP_CAPS = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+constexpr size_t ONVIF_MIN_FREE_HEAP = 24 * 1024;
+constexpr size_t ONVIF_MIN_CONTIGUOUS_HEAP = 8 * 1024;
+constexpr uint16_t ONVIF_DISCOVERY_PORT = 3702;
+struct DiscoverySocket {
+    int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    ~DiscoverySocket() { if (fd >= 0) close(fd); }
+};
 int nibble(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -239,12 +250,14 @@ bool NetworkBindings::invoke(const std::string& op, const std::vector<HostValue>
         return true;
     }
     if (op == "camera_discover") {
-        JsonDocument document;
-        JsonArray devices = document.to<JsonArray>();
         IPAddress address, mask;
-        if (!connected(address, mask)) {
-            serializeJson(devices, result.text);
-            return true;
+        if (!connected(address, mask)) return fail("ONVIF discovery deferred: Wi-Fi is not connected");
+        const size_t freeHeap = heap_caps_get_free_size(ONVIF_HEAP_CAPS);
+        const size_t largestBlock = heap_caps_get_largest_free_block(ONVIF_HEAP_CAPS);
+        if (freeHeap < ONVIF_MIN_FREE_HEAP || largestBlock < ONVIF_MIN_CONTIGUOUS_HEAP) {
+            Serial.printf("[ONVIF] Scan deferred: internal free=%u largest=%u\n",
+                static_cast<unsigned>(freeHeap), static_cast<unsigned>(largestBlock));
+            return fail("ONVIF discovery deferred: insufficient internal heap");
         }
         static const char probe[] =
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
@@ -257,25 +270,49 @@ bool NetworkBindings::invoke(const std::string& op, const std::vector<HostValue>
             "<w:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</w:Action></e:Header>"
             "<e:Body><d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types>"
             "</d:Probe></e:Body></e:Envelope>";
-        IPAddress group(239, 255, 255, 250);
-        WiFiUDP udp;
-        if (!udp.beginMulticast(group, 3702)) return fail("Unable to join ONVIF multicast group");
-        udp.beginPacket(group, 3702);
-        udp.write(reinterpret_cast<const uint8_t*>(probe), sizeof(probe) - 1);
-        udp.endPacket();
-        const uint32_t deadline = millis() + 2000;
-        uint8_t buffer[1400];
-        while (millis() < deadline) {
-            const int size = udp.parsePacket();
-            if (size <= 0) {
+        DiscoverySocket udp;
+        if (udp.fd < 0) return fail("ONVIF socket allocation failed");
+        sockaddr_in local{};
+        local.sin_family = AF_INET;
+        local.sin_addr.s_addr = static_cast<uint32_t>(address);
+        if (bind(udp.fd, reinterpret_cast<const sockaddr*>(&local), sizeof(local)) != 0)
+            return fail("ONVIF Wi-Fi bind failed");
+        if (setsockopt(udp.fd, IPPROTO_IP, IP_MULTICAST_IF, &local.sin_addr, sizeof(local.sin_addr)) != 0)
+            return fail("ONVIF multicast interface setup failed");
+        sockaddr_in group{};
+        group.sin_family = AF_INET;
+        group.sin_port = htons(ONVIF_DISCOVERY_PORT);
+        group.sin_addr.s_addr = htonl(0xeffffffaU); // 239.255.255.250
+        const auto written = sendto(udp.fd, probe, sizeof(probe) - 1, 0,
+            reinterpret_cast<const sockaddr*>(&group), sizeof(group));
+        if (written < 0) {
+            Serial.printf("[ONVIF] Probe send failed: errno=%d\n", errno);
+            return fail("ONVIF probe send failed");
+        }
+        if (written != sizeof(probe) - 1) return fail("ONVIF probe write was incomplete");
+        JsonDocument document;
+        JsonArray devices = document.to<JsonArray>();
+        const uint32_t started = millis();
+        unsigned replies = 0, oversized = 0;
+        // Read one byte past the accepted limit to detect truncated datagrams.
+        while (static_cast<uint32_t>(millis() - started) < 2000) {
+            sockaddr_in peer{};
+            socklen_t peerSize = sizeof(peer);
+            const auto readSize = recvfrom(udp.fd, scratch.data(), BYTE_LIMIT + 1, MSG_DONTWAIT,
+                reinterpret_cast<sockaddr*>(&peer), &peerSize);
+            if (readSize < 0) {
+                if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+                    Serial.printf("[ONVIF] Receive failed: errno=%d\n", errno);
+                    return fail("ONVIF reply receive failed");
+                }
                 delay(1);
                 continue;
             }
-            const int readSize = udp.read(buffer, std::min(size, static_cast<int>(sizeof(buffer) - 1)));
-            while (udp.available()) udp.read();
-            if (readSize <= 0) continue;
-            buffer[readSize] = '\0';
-            const String response(reinterpret_cast<const char*>(buffer));
+            ++replies;
+            if (readSize == 0) continue;
+            if (static_cast<size_t>(readSize) > BYTE_LIMIT) { ++oversized; continue; }
+            scratch[readSize] = '\0';
+            const String response(reinterpret_cast<const char*>(scratch.data()));
             const int matchStart = response.indexOf("ProbeMatch");
             const int xaddrsStart = matchStart < 0 ? -1 : response.indexOf("XAddrs", matchStart);
             if (xaddrsStart < 0 || response.indexOf("NetworkVideoTransmitter") < 0) continue;
@@ -314,11 +351,12 @@ bool NetworkBindings::invoke(const std::string& op, const std::vector<HostValue>
             JsonObject device = devices.add<JsonObject>();
             device["kind"] = "camera";
             device["protocol"] = "onvif";
-            device["address"] = udp.remoteIP().toString();
+            device["address"] = IPAddress(peer.sin_addr.s_addr).toString();
             device["port"] = port;
             device["serviceUrl"] = serviceUrl;
         }
-        udp.stop();
+        Serial.printf("[ONVIF] Replies=%u oversized=%u matches=%u\n", replies, oversized,
+            static_cast<unsigned>(devices.size()));
         serializeJson(devices, result.text);
         return true;
     }

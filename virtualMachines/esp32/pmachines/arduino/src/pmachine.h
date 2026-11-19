@@ -2,6 +2,7 @@
 #define PMTRACE(x)
 #pragma once
 #include "host_call_storage.h"
+#include "managed_program_buffer.h"
 #include <ArduinoJson.h>
 #include <Arduino.h> // For String
 #include <map>
@@ -656,6 +657,8 @@ public:
             runtimeUnit = other.runtimeUnit;
             residentAssets = std::move(other.residentAssets);
             programImage = std::move(other.programImage);
+            managedProgramImage = std::move(other.managedProgramImage);
+            programLoadError = other.programLoadError;
             pageTable = std::move(other.pageTable);
             frames = std::move(other.frames);
             lruTick = other.lruTick;
@@ -730,7 +733,9 @@ public:
     const std::vector<std::string> getStringPool() const;
     std::map<std::string, int> getEnumTypes() const;
     Status getStatus() const;
-    bool loadProgram(std::vector<uint8_t> pcode, const std::string& backingFile, size_t maxSpace);
+    bool loadProgram(std::vector<uint8_t> pcode, const std::string& backingFile, size_t maxSpace,
+                     bool transient = false);
+    const char* getProgramLoadError() const { return programLoadError; }
     bool loadUnit(const std::string& kind, const std::string& id, uint32_t refreshMs = 0);
     bool unloadUnit();
     void setMemoryConfig(size_t pageSizeBytes, size_t maxFrames);
@@ -872,6 +877,11 @@ private:
     RuntimeUnitDescriptor runtimeUnit;
     std::vector<ResidentAssetRecord> residentAssets;
     std::vector<uint8_t> programImage;
+    std::unique_ptr<ManagedProgramBuffer> managedProgramImage;
+    const char* programLoadError = nullptr;
+    size_t programImageSize() const {
+        return managedProgramImage ? managedProgramImage->size() : programImage.size();
+    }
     std::vector<PageTableEntry> pageTable;
     std::vector<PageFrame> frames;
     uint32_t lruTick = 0;

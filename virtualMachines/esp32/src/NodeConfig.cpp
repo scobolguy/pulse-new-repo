@@ -14,8 +14,8 @@ bool loadNodeConfig(NodeConfig& config) {
     config.wifiSsid = doc["wifiSsid"] | "";
     config.wifiPassword = doc["wifiPassword"] | "";
     config.activeClusterId = doc["activeClusterId"] | "default";
-    config.siblingPort = static_cast<uint16_t>(doc["siblingPort"] | 4100);
-    config.parentPort = static_cast<uint16_t>(doc["parentPort"] | 4000);
+    config.siblingPort = static_cast<uint16_t>(doc["siblingPort"] | 4211);
+    config.parentPort = static_cast<uint16_t>(doc["parentPort"] | 4210);
     config.parentHost = doc["parentHost"] | "";
     config.parentNodeId = doc["parentNodeId"] | "";
     config.isClusterGateway = doc["isClusterGateway"] | false;

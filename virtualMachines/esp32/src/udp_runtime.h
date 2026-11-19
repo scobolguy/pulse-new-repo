@@ -33,7 +33,8 @@ struct UdpRuntimeContext {
 
 void udpRuntimeConfigureWifiCredentials(const String& ssid, const String& password);
 bool udpRuntimeEnsureReady(uint16_t parentPort, uint16_t siblingPort);
-void udpRuntimeMaintainConnectivity(uint16_t parentPort, uint16_t siblingPort, unsigned long wifiReconnectIntervalMs);
+void udpRuntimeMaintainConnectivity(uint16_t parentPort, uint16_t siblingPort,
+                                   unsigned long wifiReconnectIntervalMs, bool manageWifi = true);
 void udpRuntimeProcessIncoming(const UdpRuntimeContext& context, uint16_t parentPort, uint16_t siblingPort);
 WiFiUDP& udpRuntimeSocket();
 uint16_t udpRuntimeGetBoundParentPort();

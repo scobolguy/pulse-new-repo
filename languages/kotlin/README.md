@@ -6,6 +6,18 @@ compiler to P-code. The initial target is the JavaScript P-machine for local
 validation, with generic-native and opt-in ESP32 tests for the same cases.
 This is not full Kotlin/Core conformance.
 
+### ESP32 boot supervisor
+
+`virtualMachines/esp32/src/boot/boot-supervisor.kt` is compiled into the small
+`virtualMachines/esp32/data/boot/pmachine-boot` bootstrap image with
+`node languages/kotlin/scripts/build-boot-supervisor.mjs`; pass `--check` to
+verify that the checked-in P-code matches a fresh compile. The image contains
+only boot policy, not ordinary applications. It runs one finite P-machine
+invocation per tick, keeping retry state in host-owned integer slots. The
+offline provisioning path is a valid boot mode; the supervisor starts FFS only
+after Wi-Fi association. Runtime, network, and filesystem primitives required
+to load/run this image remain firmware responsibilities.
+
 ### Checkpoint example
 
 `examples\helloBye.kt` prints `Hello`, checkpoints its application phase, and
@@ -60,6 +72,20 @@ before discovery, because many models do not expose ONVIF until the account is
 configured. The daemon refreshes every three minutes and expires observations
 after six minutes. Its [service](examples/tapo-camera-service.kt) exposes
 `/api/cameras/snapshot`, `/api/cameras/names`, and `/health`.
+
+### Passive SSDP discovery
+
+Install the Pulse Kotlin SSDP collector in ESP32 scheduler slot 10:
+
+```text
+node languages\kotlin\scripts\install-ssdp-daemon.mjs http://ESP32-IP
+```
+
+It listens for `NOTIFY` on `239.255.255.250:1900` without sending `M-SEARCH`
+or fetching `LOCATION` URLs. The local cache replaces observations by canonical
+UUID, caps their advertised TTL at 180 seconds, and removes them on `ssdp:byebye`.
+Mediaroom announcements without a USN are keyed by sender address. Read the cache
+at `/api/ssdp/devices/names` or `/api/ssdp/devices/snapshot`.
 
 ### Typed cache declarations
 

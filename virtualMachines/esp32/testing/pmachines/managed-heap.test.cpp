@@ -105,8 +105,13 @@ static void blockSwapEvictsAndPagesIn() {
 
 struct MemoryFile {
     uint8_t bytes[96];
+    bool shortWrite = false;
     bool writeAt(size_t offset, const uint8_t* data, size_t size) {
         if (offset + size > sizeof(bytes)) return false;
+        if (shortWrite) {
+            std::memcpy(bytes + offset, data, size / 2);
+            return false;
+        }
         std::memcpy(bytes + offset, data, size);
         return true;
     }
@@ -143,6 +148,28 @@ static void fileSwapIsBounded() {
     denyAllocations = false;
 }
 
+static void failedWriteKeepsBlockResident() {
+    uint8_t arena[48];
+    Heap heap;
+    MemoryFile file{};
+    FileSwapBacking<MemoryFile, 32> backing(file, 64);
+    heap.attach(arena, sizeof(arena));
+    heap.setBacking(&backing);
+    const uint16_t a = heap.store("aaaaaaaaaaaaaaaaaaaa", 20);
+    const uint16_t b = heap.store("bbbbbbbbbbbbbbbbbbbb", 20);
+    file.shortWrite = true;
+    assert(heap.store("cccccccccccccccccccc", 20) == Heap::INVALID);
+    assert(!heap.swapped(a) && !heap.swapped(b));
+    assert(heap.getStats().swapOuts == 0 && backing.usedBytes() == 0);
+    assert(same(heap, a, "aaaaaaaaaaaaaaaaaaaa"));
+    assert(same(heap, b, "bbbbbbbbbbbbbbbbbbbb"));
+    file.shortWrite = false;
+    assert(heap.store("cccccccccccccccccccc", 20) != Heap::INVALID);
+    assert(heap.swapped(a) && heap.getStats().swapOuts == 1);
+    assert(same(heap, a, "aaaaaaaaaaaaaaaaaaaa"));
+    heap.reset();
+}
+
 static void sweepHandlesAndRepeatedInvocations() {
     static uint8_t arena[512];
     static Heap heap;
@@ -177,6 +204,7 @@ int main() {
     pinnedBlocksStayPut();
     blockSwapEvictsAndPagesIn();
     fileSwapIsBounded();
+    failedWriteKeepsBlockResident();
     sweepHandlesAndRepeatedInvocations();
     detachedHeapFails();
     return 0;

@@ -12,7 +12,8 @@ test('ESP32 hosted frame storage runs on desktop with heap allocations denied', 
   await mkdir(results, { recursive: true });
   const directory = await mkdtemp(path.join(results, 'pulse-hosted-slots-'));
   try {
-    for (const name of ['hosted-frame-storage', 'host-call-storage', 'managed-heap', 'managed-objects']) {
+    for (const name of ['hosted-frame-storage', 'host-call-storage', 'managed-heap', 'managed-objects',
+      'authenticated-page-hashes']) {
       const executable = path.join(directory, `${name}${process.platform === 'win32' ? '.exe' : ''}`);
       const build = spawnSync('g++', ['-std=c++11', '-Wall', '-Wextra', '-Werror',
         path.join(workspace, 'testing', 'pmachines', `${name}.test.cpp`), '-o', executable],

@@ -5,6 +5,7 @@
 #include <mbedtls/sha256.h>
 #include <cstring>
 #include <esp_heap_caps.h>
+#include <esp_system.h>
 #include <limits>
 #include <new>
 
@@ -56,13 +57,35 @@ void HostedImage::reset() {
     }
     file.close();
     resident.reset();
+    hashes.reset();
+    hashPagingFile.close();
+    if (hashPagingOwner) {
+        const auto status = hashPagingOwner->removePagingFile(hashPagingPath);
+        if (status != FFSStatus::OK && status != FFSStatus::ERR_NOT_FOUND)
+            Serial.printf("[HOSTED-IMAGE] Failed to remove hash paging file: %s\n", hashPagingPath.c_str());
+    }
+    hashPagingOwner = nullptr;
+    hashPagingPath = "";
+    hashPagingKey.fill(0);
     fileBytes = count = poolBytes = cacheHits = pageReads = 0;
-    std::vector<std::array<uint8_t, 32>>().swap(hashes);
+}
+
+bool HostedImage::authenticateHash(void* context, size_t page, const uint8_t* digest, uint8_t* tag) {
+    const auto& key = static_cast<HostedImage*>(context)->hashPagingKey;
+    std::array<uint8_t, 40> input;
+    const uint64_t index = page;
+    for (size_t byte = 0; byte < 8; ++byte) input[byte] = static_cast<uint8_t>(index >> (byte * 8));
+    memcpy(input.data() + 8, digest, 32);
+    const auto* info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+    return info && mbedtls_md_hmac(info, key.data(), key.size(), input.data(), input.size(), tag) == 0;
 }
 
 bool HostedImage::open(FederatedFileSystem& ffs, const String& path, const JsonDocument& map,
                        const char* key, const char* keyId, std::string& error) {
     file = ffs.openReadFile(path);
+    // The verified page cache already buffers reads; avoid a second 4 KiB VFS buffer per image.
+    if (file && ffs.backend() != FFSBackend::Remote && !file.setBufferSize(PAGE_BYTES))
+        Serial.println("[HOSTED-IMAGE] Could not reduce local file read buffer");
     fileBytes = file ? file.size() : 0;
     const std::string profile = map["hostImageProfile"] | "storage-backed";
     if ((profile != "storage-backed" && profile != "bounded" && profile != "extended")
@@ -70,16 +93,34 @@ bool HostedImage::open(FederatedFileSystem& ffs, const String& path, const JsonD
         error = "Invalid hosted image profile or file size"; return false;
     }
     const size_t pages = fileBytes / PAGE_BYTES + (fileBytes % PAGE_BYTES != 0);
-    if (pages > std::numeric_limits<size_t>::max() / sizeof(hashes[0])) {
+    using PageHash = AuthenticatedPageHashes<File>::Digest;
+    if (pages > std::numeric_limits<size_t>::max() / sizeof(PageHash)) {
         error = "Hosted image page metadata exceeds addressable storage"; return false;
     }
-    const size_t hashBytes = pages * sizeof(hashes[0]);
-    if (hashBytes > std::numeric_limits<size_t>::max() - 32768
-        || ESP.getFreeHeap() < hashBytes + 32768
-        || heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < hashBytes + 4096) {
-        error = "Insufficient heap for authenticated hosted image pages"; return false;
+    const size_t hashBytes = pages * sizeof(PageHash);
+    if (ESP.getPsramSize()) {
+        auto* memory = static_cast<PageHash*>(
+            heap_caps_malloc(hashBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (!memory) { error = "Insufficient PSRAM for authenticated hosted image hashes"; return false; }
+        for (size_t page = 0; page < pages; ++page) new (&memory[page]) PageHash();
+        hashes.attachMemory(memory, pages);
+    } else {
+        char path[64];
+        snprintf(path, sizeof(path), "/pmachine-hashes-%08lx%08lx%08lx%08lx.swap",
+            static_cast<unsigned long>(esp_random()), static_cast<unsigned long>(esp_random()),
+            static_cast<unsigned long>(esp_random()), static_cast<unsigned long>(esp_random()));
+        hashPagingPath = path;
+        hashPagingFile = ffs.openPagingFile(hashPagingPath);
+        if (!hashPagingFile) {
+            error = "Authenticated image hashes require PSRAM, SD or remote FFS; local flash paging is prohibited";
+            return false;
+        }
+        hashPagingOwner = &ffs;
+        esp_fill_random(hashPagingKey.data(), hashPagingKey.size());
+        if (!hashes.attachFile(hashPagingFile, pages, authenticateHash, this)) {
+            error = "Hosted image hash paging exceeds addressable storage"; return false;
+        }
     }
-    hashes.resize(pages);
     if (map["hostImageResident"] == true) {
         resident.reset(static_cast<uint8_t*>(heap_caps_malloc(fileBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)));
         if (!resident) { error = "Insufficient PSRAM for resident hosted image"; return false; }
@@ -96,11 +137,16 @@ bool HostedImage::open(FederatedFileSystem& ffs, const String& path, const JsonD
     bool ok = info && mbedtls_md_setup(&context, info, 1) == 0
         && mbedtls_md_hmac_starts(&context, reinterpret_cast<const uint8_t*>(key), strlen(key)) == 0;
     std::array<uint8_t, PAGE_BYTES> buffer;
+    std::array<uint8_t, 32> pageHash;
     for (size_t offset = 0; ok && offset < fileBytes;) {
         const size_t length = std::min(PAGE_BYTES, fileBytes - offset);
         ok = file.read(buffer.data(), length) == length
             && mbedtls_md_hmac_update(&context, buffer.data(), length) == 0
-            && mbedtls_sha256_ret(buffer.data(), length, hashes[offset / PAGE_BYTES].data(), 0) == 0;
+            && mbedtls_sha256_ret(buffer.data(), length, pageHash.data(), 0) == 0;
+        if (ok && !hashes.write(offset / PAGE_BYTES, pageHash.data())) {
+            mbedtls_md_free(&context);
+            error = "Authenticated hosted image hash storage write failed"; return false;
+        }
         if (ok && resident) memcpy(resident.get() + offset, buffer.data(), length);
         offset += length;
     }
@@ -164,10 +210,11 @@ bool HostedImage::readBytes(size_t offset, uint8_t* target, size_t length, std::
             page->number = INVALID_PAGE;
             page->length = std::min(PAGE_BYTES, fileBytes - number * PAGE_BYTES);
             uint8_t digest[32];
+            uint8_t expected[32];
             if (file.size() != fileBytes || !file.seek(number * PAGE_BYTES)
                 || file.read(page->bytes.data(), page->length) != page->length
                 || mbedtls_sha256_ret(page->bytes.data(), page->length, digest, 0) != 0
-                || memcmp(digest, hashes[number].data(), 32)) {
+                || !hashes.read(number, expected) || memcmp(digest, expected, 32)) {
                 error = "Hosted image changed or storage read failed"; return false;
             }
             page->owner = this;

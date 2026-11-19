@@ -5,8 +5,8 @@
 
 struct ClusterEntry {
     String clusterId;
-    uint16_t siblingPort = 4100;
-    uint16_t parentPort = 4000;
+    uint16_t siblingPort = 4211;
+    uint16_t parentPort = 4210;
     String parentHost;
     String parentNodeId;
     bool isClusterGateway = false;
@@ -17,8 +17,8 @@ struct NodeConfig {
     String wifiSsid;
     String wifiPassword;
     String activeClusterId = "default";
-    uint16_t siblingPort = 4100;
-    uint16_t parentPort = 4000;
+    uint16_t siblingPort = 4211;
+    uint16_t parentPort = 4210;
     String parentHost;
     String parentNodeId;
     bool isClusterGateway = false;

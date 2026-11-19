@@ -241,7 +241,8 @@ bool udpRuntimeEnsureReady(uint16_t parentPort, uint16_t siblingPort) {
     return parentOk && siblingOk;
 }
 
-void udpRuntimeMaintainConnectivity(uint16_t parentPort, uint16_t siblingPort, unsigned long wifiReconnectIntervalMs) {
+void udpRuntimeMaintainConnectivity(uint16_t parentPort, uint16_t siblingPort,
+                                   unsigned long wifiReconnectIntervalMs, bool manageWifi) {
     const wl_status_t status = WiFi.status();
     if (status == WL_CONNECTED) {
         if (!beaconWarmupArmed) udpRuntimeDeferBeacons();
@@ -256,7 +257,7 @@ void udpRuntimeMaintainConnectivity(uint16_t parentPort, uint16_t siblingPort, u
     beaconWarmupArmed = false;
     beaconWarmupComplete = false;
 
-    if (wifiSsid.isEmpty()) {
+    if (!manageWifi || wifiSsid.isEmpty()) {
         return;
     }
 

@@ -11,6 +11,7 @@
 #include <cmath>
 #include <atomic>
 #include <cctype>
+#include <new>
 #include <set>
 
 namespace pmachine {
@@ -42,7 +43,7 @@ class HardwareHandlers {
     TaskHandle_t task = nullptr;
     std::unique_ptr<Handler> handler;
     PMachine machine;
-    HostExecutionStorage storage;
+    std::unique_ptr<HostExecutionStorage> storage;
     AssemblerishTrigger trigger;
     bool sampled = false, sampleAttempted = false, hasEvent = false, faulted = false;
     int temperature = 0, humidity = 0;
@@ -152,7 +153,7 @@ class HardwareHandlers {
             struct WatchdogLease { ~WatchdogLease() { esp_task_wdt_delete(nullptr); } } watchdog;
             machine.runImage(handler->instructions.size(), [&](size_t index) {
                 return handler->instructions[index];
-            }, &storage);
+            }, storage.get());
         }
         ++runs;
         const auto flow = machine.getFlowStateSnapshot();
@@ -234,7 +235,18 @@ class HardwareHandlers {
 public:
     bool prepare(std::string& error) {
         if (task) return true;
-        if (!storage.prepare()) { error = "Unable to reserve handler execution storage"; return false; }
+        bool ready = false;
+        try {
+            if (!storage) storage.reset(new (std::nothrow) HostExecutionStorage);
+            ready = storage && storage->prepare();
+        } catch (const std::bad_alloc&) {
+            ready = false;
+        }
+        if (!ready) {
+            storage.reset();
+            error = "Unable to reserve handler execution storage";
+            return false;
+        }
         if (!mutex) mutex = xSemaphoreCreateMutex();
         if (!triggers) triggers = xQueueCreate(16, sizeof(TickType_t));
         if (!mutex || !triggers || xTaskCreate([](void* context) {

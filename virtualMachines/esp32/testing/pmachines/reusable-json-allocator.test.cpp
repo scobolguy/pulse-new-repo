@@ -1,3 +1,7 @@
+#ifndef ARDUINOJSON_POOL_CAPACITY
+// Keep two JSON documents within the arena on 64-bit test hosts as well.
+#define ARDUINOJSON_POOL_CAPACITY 32
+#endif
 #include "../../pmachines/arduino/src/reusable_json_allocator.h"
 #include "../../pmachines/arduino/src/buffered_json.h"
 #include <cassert>
@@ -26,13 +30,12 @@ public:
     }
 };
 
-int main() {
-    TestAllocator heap;
-    pmachine::ReusableJsonAllocator<4096> allocator(&heap);
+static void checkReusableArena(TestAllocator& heap, TestAllocator& arena) {
+    pmachine::ReusableJsonAllocator<4096> allocator(&heap, &arena);
+    assert(arena.live == 0);
     heap.fail = true;
     std::string output;
     output.reserve(1024);
-    char buffer[1024];
     const char* input = R"({"nodeId":"esp32-vm-2bf4","localAddress":"192.168.2.63","listeners":[{"protocol":"http","host":"192.168.2.63","port":80}],"metadata":{"hardware":"ESP32","runtime":"esp32-pmachine"}})";
     for (int run = 0; run < 100; ++run) {
         allocator.reset();
@@ -45,12 +48,13 @@ int main() {
         assert(!doc.overflowed());
         assert(doc["sequence"] == 12);
         const size_t expected = measureJson(doc);
-        assert(pmachine::serializeBufferedJson(doc, expected, buffer, output) == expected);
+        assert(pmachine::serializeBufferedJson(doc, expected, output) == expected);
         JsonDocument roundTrip;
         assert(!deserializeJson(roundTrip, output));
         assert(roundTrip["status"] == "available");
     }
     assert(heap.allocations == 0);
+    assert(arena.allocations == 1 && arena.live == 1);
 
     allocator.reset();
     void* small = allocator.allocate(16);
@@ -95,4 +99,21 @@ int main() {
         assert(!doc.overflowed());
     }
     assert(heap.live == 0);
+}
+
+int main() {
+    TestAllocator heap;
+    TestAllocator arena;
+    checkReusableArena(heap, arena);
+    assert(arena.live == 0);
+
+    arena.fail = true;
+    heap.fail = false;
+    pmachine::ReusableJsonAllocator<4096> recovering(&heap, &arena);
+    auto* fallback = recovering.allocate(64);
+    assert(fallback && heap.live == 1);
+    recovering.deallocate(fallback);
+    arena.fail = false;
+    recovering.reset();
+    assert(recovering.allocate(64) && heap.live == 0 && arena.live == 1);
 }

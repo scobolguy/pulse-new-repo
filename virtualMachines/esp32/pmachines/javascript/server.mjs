@@ -8,11 +8,20 @@ import os from 'node:os';
 import v8 from 'node:v8';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { timingSafeEqual, randomUUID } from 'node:crypto';
+import { createHash, timingSafeEqual, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-import { PMachineScheduler, runSingleMessageForEvolution } from './index.mjs';
+import {
+  executeProgram,
+  loadOpcodeMap,
+  parsePcode,
+  parseProgramMapMappings,
+  PMachineScheduler,
+  runSingleMessageForEvolution
+} from './index.mjs';
 import { normalizeDiscoveryAnnouncement } from './discovery-collector.mjs';
 import { createAggregatorCacheSourceResolver, createPascalishServiceHost } from './src/service-host.mjs';
+import { createFilesystemBindings } from './src/filesystem-bindings.mjs';
+import { createNodeSlotScheduler } from './src/slot-scheduler.mjs';
 import { createInventoryClient } from './src/inventory-client.mjs';
 import { createWindowsBluetoothSource } from './src/bluetooth-source.mjs';
 import { signPcodeText } from '../../aggregator/scripts/pcode-signing.mjs';
@@ -42,7 +51,8 @@ function parseCliArgs(argv) {
     udpAnnouncePort: Number(process.env.JS_PMACHINE_UDP_ANNOUNCE_PORT ?? process.env.UDP_PORT ?? 4210),
     storageGrants: JSON.parse(process.env.JS_PMACHINE_STORAGE_GRANTS || '{}'),
     distributedGrants: JSON.parse(process.env.JS_PMACHINE_DISTRIBUTED_GRANTS || '{}'),
-    bluetoothGrants: JSON.parse(process.env.JS_PMACHINE_BLUETOOTH_GRANTS || '[]')
+    bluetoothGrants: JSON.parse(process.env.JS_PMACHINE_BLUETOOTH_GRANTS || '[]'),
+    ffsRoot: process.env.JS_PMACHINE_FFS_ROOT || ''
   };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -54,6 +64,7 @@ function parseCliArgs(argv) {
     else if (token === '--advertise-host') args.advertiseHost = String(argv[++index]);
     else if (token === '--udp-announce-host') args.udpAnnounceHost = String(argv[++index]);
     else if (token === '--udp-announce-port') args.udpAnnouncePort = Number(argv[++index]);
+    else if (token === '--ffs-root') args.ffsRoot = String(argv[++index]);
   }
   if (!args.name) args.name = `js-pmachine-${args.port}`;
   return args;
@@ -87,7 +98,16 @@ async function readParams(req, url) {
     rawBody = await readBody(req);
     const contentType = String(req.headers['content-type'] || '');
     if (rawBody && contentType.includes('application/json')) {
-      for (const [key, value] of Object.entries(JSON.parse(rawBody))) {
+      let parsed;
+      try {
+        parsed = JSON.parse(rawBody);
+      } catch {
+        throw Object.assign(new Error('Invalid JSON request body'), { status: 400 });
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw Object.assign(new Error('Expected a JSON request object'), { status: 400 });
+      }
+      for (const [key, value] of Object.entries(parsed)) {
         params.set(key, ['serviceLifecycle', 'reportTarget'].includes(key) && value !== null && typeof value === 'object'
           ? JSON.stringify(value) : String(value));
       }
@@ -157,6 +177,7 @@ export function createJsPmachineNodeServer({
   bluetoothGrants = [],
   bluetoothSourceFactory = createWindowsBluetoothSource,
   storageGrants = {},
+  ffsRoot = '',
   discoveryFactory = async options => {
     const { createLanDiscovery } = await import('../../aggregator/src/service-lifecycle/lan-discovery.mjs');
     return createLanDiscovery(options);
@@ -185,10 +206,117 @@ export function createJsPmachineNodeServer({
     throw new Error('Announcement interval must be a positive integer');
   }
   const files = new Map();
+  const uploadedFiles = new Set();
   const startedAt = Date.now();
   const stats = { runs: 0, debugSessions: 0 };
   let hostedService = null;
   const additionalHostedServices = new Map();
+  const managedHosts = new Map();
+  let durableFfs;
+  const durableFfsReady = ffsRoot
+    ? createFilesystemBindings({ pmachine: { path: ffsRoot, readOnly: false } }, {
+      maxFileBytes: 1000000,
+      maxPageBytes: 262144
+    }).then(bindings => { durableFfs = bindings; })
+    : Promise.resolve();
+
+  function ffsRelativePath(remotePath) {
+    if (typeof remotePath !== 'string' || remotePath.length > 4096
+      || !remotePath.startsWith('/') || remotePath.startsWith('//')
+      || remotePath.includes('\\') || remotePath.includes(':')
+      || [...remotePath].some(character => character.charCodeAt(0) < 32)) {
+      throw Object.assign(new Error('Invalid FFS path'), { status: 400 });
+    }
+    const parts = remotePath.slice(1).split('/');
+    if (!parts.length || parts.some(part => !part || part === '.' || part === '..'
+      || /[ .]$/.test(part) || /[<>?"*|]/.test(part))) {
+      throw Object.assign(new Error('Invalid FFS path'), { status: 400 });
+    }
+    return parts.join('/');
+  }
+
+  function bundleFilePath(storagePath, entry) {
+    const base = ffsRelativePath(storagePath);
+    if (typeof entry !== 'string' || !entry || entry.startsWith('/')
+      || entry.includes('\\') || entry.includes(':')) {
+      throw Object.assign(new Error('Invalid bundle entry path'), { status: 400 });
+    }
+    const relative = entry.split('/');
+    if (relative.some(part => !part || part === '.' || part === '..'
+      || /[ .]$/.test(part) || /[<>?"*|]/.test(part))) {
+      throw Object.assign(new Error('Invalid bundle entry path'), { status: 400 });
+    }
+    return `/${base}/${relative.join('/')}`;
+  }
+
+  async function readFfsFile(remotePath) {
+    const key = String(remotePath || '');
+    const relative = ffsRelativePath(key);
+    await durableFfsReady;
+    if (durableFfs) {
+      try {
+        return await durableFfs.handlers['host.fs_read_text']('pmachine', relative);
+      } catch (error) {
+        if (error.code === 'ENOENT') {
+          throw Object.assign(new Error(`File not found: ${remotePath}`), { status: 404 });
+        }
+        throw error;
+      }
+    }
+    const value = files.get(key);
+    if (value == null) throw Object.assign(new Error(`File not found: ${remotePath}`), { status: 404 });
+    return value;
+  }
+
+  async function writeFfsFile(remotePath, value) {
+    const relative = ffsRelativePath(remotePath);
+    await durableFfsReady;
+    if (!durableFfs) {
+      files.set(remotePath, String(value));
+      uploadedFiles.add(remotePath);
+      return;
+    }
+    const parts = relative.split('/');
+    let directory = '';
+    for (const part of parts.slice(0, -1)) {
+      directory = directory ? `${directory}/${part}` : part;
+      if (!await durableFfs.handlers['host.fs_exists']('pmachine', directory)) {
+        await durableFfs.handlers['host.fs_mkdir']('pmachine', directory);
+      }
+    }
+    await durableFfs.handlers['host.fs_write_text']('pmachine', relative, String(value));
+    uploadedFiles.add(remotePath);
+  }
+
+  let schedulerSavedState = '{"version":1,"slots":[]}';
+  const slotAdapter = createNodeSlotScheduler({
+    readFile: readFfsFile,
+    prepare: prepareSlotProgram,
+    start: startSlotProgram,
+    stop: stopSlotProgram,
+    async readState() {
+      await durableFfsReady;
+      if (!durableFfs) return schedulerSavedState;
+      try {
+        return await durableFfs.handlers['host.fs_read_text']('pmachine', '.pmachine-scheduler/slots.json');
+      } catch (error) {
+        if (error.code === 'ENOENT') return '{"version":1,"slots":[]}';
+        throw error;
+      }
+    },
+    async writeState(text) {
+      await durableFfsReady;
+      if (!durableFfs) {
+        schedulerSavedState = text;
+        return;
+      }
+      const directory = '.pmachine-scheduler';
+      if (!await durableFfs.handlers['host.fs_exists']('pmachine', directory)) {
+        await durableFfs.handlers['host.fs_mkdir']('pmachine', directory);
+      }
+      await durableFfs.handlers['host.fs_write_text']('pmachine', `${directory}/slots.json`, text);
+    }
+  });
 
   function serviceRegistrations() {
     const origin = `http://${advertiseHost}:${server.address()?.port ?? port}`;
@@ -196,7 +324,7 @@ export function createJsPmachineNodeServer({
       serviceId: 'pmachine', instanceId: `${name}:pmachine`, kind: 'runtime',
       provider: 'javascript', enabled: true, endpoint: `${origin}/pmachine/execute_file`
     }];
-    for (const host of [hostedService, ...additionalHostedServices.values()]) {
+    for (const host of [hostedService, ...additionalHostedServices.values(), ...managedHosts.values()]) {
       if (!host) continue;
       const registration = host.getRegistration();
       const status = host.getStatus();
@@ -220,15 +348,9 @@ export function createJsPmachineNodeServer({
     return services;
   }
 
-  function readFfsFile(remotePath) {
-    const value = files.get(String(remotePath || ''));
-    if (value == null) throw Object.assign(new Error(`File not found: ${remotePath}`), { status: 404 });
-    return value;
-  }
-
   async function executeFile(params) {
-    const pcodeText = readFfsFile(params.get('file'));
-    const programMapText = params.get('programMap') ? readFfsFile(params.get('programMap')) : '{}';
+    const pcodeText = await readFfsFile(params.get('file'));
+    const programMapText = params.get('programMap') ? await readFfsFile(params.get('programMap')) : '{}';
     const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'js-pmachine-node-'));
     try {
       const pcodePath = path.join(tempDirectory, 'program.pcode');
@@ -270,10 +392,10 @@ export function createJsPmachineNodeServer({
     if (!additional && hostedService?.getStatus().running) {
       throw Object.assign(new Error('Stop the active hosted service before installing another'), { status: 409 });
     }
-    const servicePcode = readFfsFile(params.get('serviceFile'));
+    const servicePcode = await readFfsFile(params.get('serviceFile'));
     const serviceMap = parseHostedMap(
       servicePcode,
-      readFfsFile(params.get('serviceMap')),
+      await readFfsFile(params.get('serviceMap')),
       'service',
     );
     if (serviceMap.hostBindingsVersion !== 1 || serviceMap.runtimeUnit?.kind !== 'service') {
@@ -298,16 +420,16 @@ export function createJsPmachineNodeServer({
         if (typeof entry?.file !== 'string' || typeof entry?.map !== 'string') {
           throw Object.assign(new Error('Each daemon needs file and map'), { status: 400 });
         }
-        const pcodeText = readFfsFile(entry.file);
-        const programMap = parseHostedMap(pcodeText, readFfsFile(entry.map), 'daemon');
+        const pcodeText = await readFfsFile(entry.file);
+        const programMap = parseHostedMap(pcodeText, await readFfsFile(entry.map), 'daemon');
         daemons.push({ compiled: { pcodeText, programMap }, udpPort: entry.udpPort ?? null, udpShared: entry.udpShared ?? false,
           udpQueueLimit: entry.udpQueueLimit ?? 1,
           udpBindAddress: entry.udpBindAddress ?? (additional ? '127.0.0.1' : '0.0.0.0'),
           multicastGroup: entry.multicastGroup ?? '', multicastInterface: entry.multicastInterface ?? '' });
       }
     } else if (daemonFile) {
-      const daemonPcode = readFfsFile(daemonFile);
-      const daemonMap = parseHostedMap(daemonPcode, readFfsFile(daemonMapFile), 'daemon');
+      const daemonPcode = await readFfsFile(daemonFile);
+      const daemonMap = parseHostedMap(daemonPcode, await readFfsFile(daemonMapFile), 'daemon');
       if (daemonMap.hostBindingsVersion !== 1 || daemonMap.runtimeUnit?.kind !== 'daemon') {
         throw Object.assign(new Error('Expected a hosted daemon'), { status: 400 });
       }
@@ -400,9 +522,210 @@ export function createJsPmachineNodeServer({
     return hostedService.getStatus();
   }
 
-  function createDebugSession(params) {
-    const pcodeText = readFfsFile(params.get('file'));
-    const programMap = params.get('programMap') ? JSON.parse(readFfsFile(params.get('programMap'))) : {};
+  function stableJson(value) {
+    if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+    if (value && typeof value === 'object') {
+      return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+    }
+    return JSON.stringify(value);
+  }
+
+  async function readBundleImage(manifest, entry, mapEntry, expectedKind, digest = null, requireDigest = true) {
+    if (typeof manifest.storagePath !== 'string') {
+      throw Object.assign(new Error('Bundle storagePath is required'), { status: 400 });
+    }
+    if (requireDigest && (digest === null || digest === undefined)) {
+      throw Object.assign(new Error('Bundle entry SHA-256 is required'), { status: 400 });
+    }
+    const pcodeText = await readFfsFile(bundleFilePath(manifest.storagePath, entry));
+    if (digest !== null && digest !== undefined && (typeof digest !== 'string'
+      || !/^[a-f0-9]{64}$/i.test(digest)
+      || createHash('sha256').update(pcodeText, 'utf8').digest('hex') !== digest.toLowerCase())) {
+      throw Object.assign(new Error('Bundle entry SHA-256 mismatch'), { status: 400 });
+    }
+    const mapText = await readFfsFile(bundleFilePath(manifest.storagePath, mapEntry));
+    const programMap = parseHostedMap(pcodeText, mapText, expectedKind || 'program');
+    if (expectedKind && (programMap.hostBindingsVersion !== 1
+      || programMap.runtimeUnit?.kind !== expectedKind)) {
+      throw Object.assign(new Error(`Expected a hosted ${expectedKind}`), { status: 400 });
+    }
+    try {
+      parsePcode(pcodeText);
+      parseProgramMapMappings(programMap);
+    } catch (error) {
+      throw Object.assign(new Error(`Invalid ${expectedKind || 'program'} image: ${error.message}`), { status: 400 });
+    }
+    return { pcodeText, programMap };
+  }
+
+  async function readDaemonEntries(manifest) {
+    if (manifest.daemons === undefined) return [];
+    if (!Array.isArray(manifest.daemons) || manifest.daemons.length > 16) {
+      throw Object.assign(new Error('Invalid daemons list (0..16 entries)'), { status: 400 });
+    }
+    const daemons = [];
+    for (const entry of manifest.daemons) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        throw Object.assign(new Error('Invalid daemon entry'), { status: 400 });
+      }
+      const daemon = await readBundleImage(
+        manifest,
+        entry.entry ?? entry.file,
+        entry.programMap ?? entry.map,
+        'daemon',
+        entry.sha256,
+      );
+      daemons.push({
+        compiled: daemon,
+        udpPort: entry.udpPort ?? null,
+        udpShared: entry.udpShared ?? false,
+        udpQueueLimit: entry.udpQueueLimit ?? 1,
+        udpBindAddress: entry.udpBindAddress ?? '127.0.0.1',
+        multicastGroup: entry.multicastGroup ?? '',
+        multicastInterface: entry.multicastInterface ?? ''
+      });
+    }
+    return daemons;
+  }
+
+  async function createSlotHost(prepared, slot) {
+    const service = prepared.service || {
+      pcodeText: 'HALT',
+      programMap: {
+        hostBindingsVersion: 1,
+        runtimeUnit: { kind: 'service', id: `slot-${slot}-daemon-host` },
+        sourceLanguage: 'scheduler'
+      }
+    };
+    const collectorId = `pmachine-slot-${slot}`;
+    return createPascalishServiceHost({
+      compiled: service,
+      daemons: prepared.daemons,
+      collectorId,
+      host: '127.0.0.1',
+      httpPort: null,
+      udpPort: null,
+      sharedHttpListener: () => server.address(),
+      cacheSourceResolver: (aggregatorUrl || backendUrl)
+        ? createAggregatorCacheSourceResolver({ aggregatorUrl: aggregatorUrl || backendUrl, fetchImpl })
+        : null,
+      storageRoots: Object.hasOwn(storageGrants, collectorId) ? storageGrants[collectorId] : {},
+      distributedBindings: Object.hasOwn(distributedGrants, collectorId) ? distributedGrants[collectorId] : {},
+      bluetoothSourceFactory: bluetoothGrants.includes(collectorId) ? bluetoothSourceFactory : null,
+      bindings: {
+        'host.announcement': normalizeDiscoveryAnnouncement,
+        'host.observation_ttl': () => 180000,
+      },
+      logger,
+      onDaemonEvent,
+      scheduler,
+    });
+  }
+
+  async function prepareSlotProgram(descriptor) {
+    const manifestPath = descriptor.manifestPath;
+    if (typeof manifestPath !== 'string' || !manifestPath) {
+      throw Object.assign(new Error('Scheduler manifestPath is required'), { status: 400 });
+    }
+    const storedText = await readFfsFile(manifestPath);
+    let storedManifest;
+    try {
+      storedManifest = JSON.parse(storedText);
+    } catch {
+      throw Object.assign(new Error('Invalid bundle manifest'), { status: 400 });
+    }
+    if (!storedManifest || typeof storedManifest !== 'object' || Array.isArray(storedManifest)
+      || stableJson(storedManifest) !== stableJson(descriptor.manifest)) {
+      throw Object.assign(new Error('Bundle manifest changed since it was scheduled'), { status: 409 });
+    }
+    if (descriptor.kind !== storedManifest.type) {
+      throw Object.assign(new Error('Bundle kind does not match scheduler descriptor'), { status: 400 });
+    }
+    if (descriptor.kind === 'transient') {
+      const image = await readBundleImage(
+        storedManifest, storedManifest.entry, storedManifest.programMap, null, storedManifest.sha256,
+      );
+      return { kind: 'transient', manifest: storedManifest, image };
+    }
+    const daemons = await readDaemonEntries(storedManifest);
+    if (descriptor.kind === 'service') {
+      const service = await readBundleImage(
+        storedManifest, storedManifest.entry, storedManifest.programMap, 'service', storedManifest.sha256,
+      );
+      const prepared = { kind: 'service', manifest: storedManifest, service, daemons };
+      prepared.host = await createSlotHost(prepared, descriptor.slot);
+      return prepared;
+    }
+    if (descriptor.kind === 'daemon') {
+      const daemon = await readBundleImage(
+        storedManifest, storedManifest.entry, storedManifest.programMap, 'daemon', storedManifest.sha256,
+      );
+      let service = null;
+      if (storedManifest.serviceEntry !== undefined || storedManifest.serviceProgramMap !== undefined) {
+        if (typeof storedManifest.serviceEntry !== 'string'
+          || typeof storedManifest.serviceProgramMap !== 'string') {
+          throw Object.assign(new Error('serviceEntry and serviceProgramMap must be supplied together'), { status: 400 });
+        }
+        service = await readBundleImage(
+          storedManifest, storedManifest.serviceEntry, storedManifest.serviceProgramMap, 'service', null, false,
+        );
+      }
+      const prepared = {
+        kind: 'daemon',
+        manifest: storedManifest,
+        service,
+        daemons: [{ compiled: daemon }, ...daemons]
+      };
+      prepared.host = await createSlotHost(prepared, descriptor.slot);
+      return prepared;
+    }
+    throw Object.assign(new Error('Unsupported scheduler bundle kind'), { status: 400 });
+  }
+
+  async function startSlotProgram(prepared, descriptor) {
+    if (prepared.kind === 'transient') {
+      const opcodeMap = await loadOpcodeMap();
+      const options = {
+        instructions: parsePcode(prepared.image.pcodeText),
+        programMap: prepared.image.programMap,
+        opcodeMap,
+        inputQueue: prepared.manifest.inputQueue || 'deploy-api.in',
+        sourceMessage: prepared.manifest.message ?? '',
+        runtimeContext: { maxSteps: 200000 }
+      };
+      const result = scheduler ? await scheduler.execute(options, { name: `transient:${descriptor.slot}` })
+        : await executeProgram(options);
+      if (result.error || result.stepLimitHit) {
+        throw Object.assign(new Error(result.error || 'Transient program exceeded its step limit'), { status: 422 });
+      }
+      return { kind: 'transient', result };
+    }
+
+    const nextHost = prepared.host;
+    try {
+      await nextHost.start();
+    } catch (error) {
+      await nextHost.stop();
+      throw error;
+    }
+    managedHosts.set(descriptor.slot, nextHost);
+    return nextHost;
+  }
+
+  async function stopSlotProgram(active) {
+    if (active?.kind === 'transient') return;
+    await active?.stop();
+    for (const [slot, host] of managedHosts) {
+      if (host === active) {
+        managedHosts.delete(slot);
+        break;
+      }
+    }
+  }
+
+  async function createDebugSession(params) {
+    const pcodeText = await readFfsFile(params.get('file'));
+    const programMap = params.get('programMap') ? JSON.parse(await readFfsFile(params.get('programMap'))) : {};
     const state = createJavaScriptPmachineDebugSession({ pcodeText, programMap, inputQueue: 'debug.in' });
     const breakpoints = String(params.get('breakpoints') || '').split(',').map((value) => Number.parseInt(value, 10))
       .filter((value) => Number.isInteger(value) && value >= 0);
@@ -435,6 +758,30 @@ export function createJsPmachineNodeServer({
       return send(res, 200, { nodeId: name, services: serviceRegistrations() });
     }
 
+    if (route === '/api/pmachine/scheduler'
+      || route === '/api/pmachine/scheduler/load'
+      || route === '/api/pmachine/scheduler/unload') {
+      let operation;
+      if (req.method === 'GET' && route === '/api/pmachine/scheduler') {
+        operation = 'status';
+      } else if (req.method === 'POST' && route === '/api/pmachine/scheduler/load') {
+        operation = 'load';
+      } else if (req.method === 'POST' && route === '/api/pmachine/scheduler/unload') {
+        operation = 'unload';
+      } else {
+        return send(res, 405, { version: 1, error: 'Use GET scheduler status or POST load/unload' });
+      }
+      let request = rawBody;
+      if (operation === 'status') request = '{}';
+      if (!request || !String(req.headers['content-type'] || '').includes('application/json')) {
+        const body = Object.fromEntries(params);
+        if (typeof body.slot === 'string' && /^[0-9]+$/.test(body.slot)) body.slot = Number(body.slot);
+        request = JSON.stringify(body);
+      }
+      const result = await dispatchSlotScheduler(operation, request);
+      return send(res, result.status, result.body);
+    }
+
     if (route === '/status' && req.method === 'GET') {
       const schedulerStatus = scheduler?.getStatus() || null;
       const heap = v8.getHeapStatistics();
@@ -455,15 +802,18 @@ export function createJsPmachineNodeServer({
         services: serviceRegistrations().map(service => service.serviceId),
         port: server.address()?.port ?? port,
         uptimeMs: Date.now() - startedAt,
-        files: files.size,
+        files: uploadedFiles.size || files.size,
         ...stats
       });
     }
 
     if (route === '/ffs/upload' && req.method === 'POST') {
       const file = String(params.get('file') || '');
-      if (!file.startsWith('/') || file.includes('..')) return send(res, 400, 'Invalid file param');
-      files.set(file, String(params.get('body') ?? ''));
+      try {
+        await writeFfsFile(file, String(params.get('body') ?? ''));
+      } catch (error) {
+        return send(res, error.status || 500, error.message);
+      }
       return send(res, 200, 'File uploaded');
     }
 
@@ -478,7 +828,9 @@ export function createJsPmachineNodeServer({
       const collectorId = params.get('collectorId');
       if (collectorId) {
         const selected = hostedService?.getStatus().collectorId === collectorId
-          ? hostedService : additionalHostedServices.get(collectorId);
+          ? hostedService
+          : additionalHostedServices.get(collectorId)
+            || [...managedHosts.values()].find(host => host.getStatus().collectorId === collectorId);
         if (!selected) return send(res, 404, { error: `Hosted collector not found: ${collectorId}` });
         return send(res, 200, selected.getStatus());
       }
@@ -488,6 +840,10 @@ export function createJsPmachineNodeServer({
     }
     if (route === '/pmachine/service_host/stop' && req.method === 'POST') {
       const collectorId = params.get('collectorId');
+      if (collectorId && [...managedHosts.values()].some(host =>
+        host.getStatus().collectorId === collectorId)) {
+        return send(res, 403, { error: 'Scheduler-managed services must be unloaded through the slot scheduler' });
+      }
       if (collectorId && additionalHostedServices.has(collectorId)) {
         const selected = additionalHostedServices.get(collectorId);
         await selected.stop();
@@ -500,7 +856,7 @@ export function createJsPmachineNodeServer({
     }
 
     if (route === '/pmachine/debug/session') {
-      if (req.method === 'POST') return send(res, 200, createDebugSession(params));
+      if (req.method === 'POST') return send(res, 200, await createDebugSession(params));
       const id = requireSession(params);
       if (req.method === 'GET') return send(res, 200, deviceDebugState(id));
       if (req.method === 'DELETE') {
@@ -534,16 +890,21 @@ export function createJsPmachineNodeServer({
       return send(res, 200, { sessionId: id, breakpoints: [...current] });
     }
 
-    if (hostedService?.getStatus().running) {
-      const result = await hostedService.dispatch({
-        transport: 'http',
-        method: req.method,
-        path: route,
-        body: rawBody,
-        peer: req.socket.remoteAddress?.replace('::ffff:', '') || '',
-        query: Object.fromEntries(url.searchParams),
-      });
-      return send(res, result.status, JSON.stringify(result.body), 'application/json');
+    const request = {
+      transport: 'http',
+      method: req.method,
+      path: route,
+      body: rawBody,
+      peer: req.socket.remoteAddress?.replace('::ffff:', '') || '',
+      query: Object.fromEntries(url.searchParams),
+    };
+    const dispatchHosts = [hostedService, ...additionalHostedServices.values(), ...managedHosts.values()];
+    for (const host of dispatchHosts) {
+      if (!host?.getStatus().running) continue;
+      const result = await host.dispatch(request);
+      if (result.status !== 404) {
+        return send(res, result.status, JSON.stringify(result.body), 'application/json');
+      }
     }
     return send(res, 404, 'Not found');
   }
@@ -553,6 +914,34 @@ export function createJsPmachineNodeServer({
       if (!res.headersSent) send(res, error?.status || 500, error?.message || String(error));
     });
   });
+  let schedulerRecoveryError = null;
+  const schedulerBootstrap = (async () => {
+    await durableFfsReady;
+    const restored = await slotAdapter.runtime.dispatch('restore');
+    if (restored.status !== 200) {
+      throw Object.assign(new Error(restored.body?.error || 'Scheduler recovery failed'), { status: restored.status });
+    }
+  })().catch(error => {
+    schedulerRecoveryError = error;
+    logger.error(`[js-pmachine] slot scheduler recovery failed: ${error.message}`);
+  });
+  async function dispatchSlotScheduler(operation, request = '{}') {
+    await schedulerBootstrap;
+    if (schedulerRecoveryError) {
+      return {
+        status: 503,
+        body: { version: 1, error: `Scheduler recovery failed: ${schedulerRecoveryError.message}` }
+      };
+    }
+    try {
+      return await slotAdapter.runtime.dispatch(operation, request);
+    } catch (error) {
+      return {
+        status: error.status || (operation === 'status' ? 503 : 400),
+        body: { version: 1, error: error.message || String(error) }
+      };
+    }
+  }
   server.once('close', () => {
     const service = hostedService;
     hostedService = null;
@@ -562,6 +951,10 @@ export function createJsPmachineNodeServer({
     for (const [collectorId, additional] of additionalHostedServices) {
       additionalHostedServices.delete(collectorId);
       additional.stop().catch(error => logger.error(`[js-pmachine] ${collectorId} shutdown failed: ${error.message}`));
+    }
+    for (const [slot, managed] of managedHosts) {
+      managedHosts.delete(slot);
+      managed.stop().catch(error => logger.error(`[js-pmachine] scheduler slot ${slot} shutdown failed: ${error.message}`));
     }
   });
   if (!backendUrl && udpAnnouncePort && !udpAnnounceHost) {

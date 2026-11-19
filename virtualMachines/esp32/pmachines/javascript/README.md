@@ -133,6 +133,30 @@ waiting/ready time. Shared-state bindings must tolerate that interleaving.
 Instruction limits remain unchanged. The runtime cannot interrupt a synchronous
 host adapter; it checks the active-time budget when control returns.
 
+### Node server slot scheduler
+
+The Node server exposes the shared Kotlin scheduler policy at:
+
+- `GET /api/pmachine/scheduler`
+- `POST /api/pmachine/scheduler/load` with `{ "manifestPath": "...", "slot": 1 }`
+- `POST /api/pmachine/scheduler/unload` with `{ "slot": 1 }`
+
+Slot 0 is reserved; program slots are 1–16. Services and daemons remain active
+until unloaded, while a transient executes during activation and releases its
+slot on completion. Service requests are dispatched through managed hosts, and
+standalone daemon bundles run their timed P-code under the hosted runtime. The
+legacy service-host endpoints remain available for compatibility, but cannot
+stop a scheduler-managed service.
+
+By default, FFS uploads and scheduler state use process memory. To retain them
+across node restarts, an operator can grant one filesystem root with
+`--ffs-root <absolute-directory>` or `JS_PMACHINE_FFS_ROOT`. Upload paths remain
+FFS paths (for example `/pmachine/programs/example/manifest.json`); the root is
+not exposed as an arbitrary disk path. Files are resolved through the named-root
+filesystem bindings, which reject traversal and links and use atomic writes.
+Scheduler recovery runs before scheduler APIs admit operations. A bad or
+unreadable saved state is reported as HTTP 503 rather than silently replaced.
+
 SCREEN COBOL requesters use a shared scheduler by default. Their host can supply
 one explicitly to share its execution slots with other kinds of programs.
 

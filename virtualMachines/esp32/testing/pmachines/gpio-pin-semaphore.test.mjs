@@ -24,23 +24,39 @@ test('GPIO coordination covers S3 GPIO48 without enabling flash pins or changing
 `,
       'freertos/FreeRTOS.h': `#pragma once
 #include <cstdint>
-struct StaticSemaphore_t { bool held; };
+#include <atomic>
+#include <chrono>
+#include <mutex>
+#include <new>
+struct StaticSemaphore_t { std::timed_mutex mutex; };
 using SemaphoreHandle_t = StaticSemaphore_t*;
+using portMUX_TYPE = std::mutex;
 constexpr int pdTRUE = 1;
 #define pdMS_TO_TICKS(ms) (ms)
+#define portMUX_INITIALIZER_UNLOCKED {}
+#define portENTER_CRITICAL(mux) (mux)->lock()
+#define portEXIT_CRITICAL(mux) (mux)->unlock()
+inline std::atomic<int> liveMutexes{0};
+inline std::atomic<bool> failNextMutexAllocation{false};
 `,
       'freertos/semphr.h': `#pragma once
 #include "FreeRTOS.h"
-inline SemaphoreHandle_t xSemaphoreCreateMutexStatic(StaticSemaphore_t* storage) {
-    storage->held = false;
-    return storage;
+inline SemaphoreHandle_t xSemaphoreCreateMutex() {
+    if (failNextMutexAllocation.exchange(false)) return nullptr;
+    auto* semaphore = new (std::nothrow) StaticSemaphore_t{};
+    if (semaphore != nullptr) ++liveMutexes;
+    return semaphore;
 }
 inline int xSemaphoreTake(SemaphoreHandle_t semaphore, uint32_t) {
-    if (semaphore->held) return 0;
-    semaphore->held = true;
-    return pdTRUE;
+    return semaphore->mutex.try_lock() ? pdTRUE : 0;
 }
-inline void xSemaphoreGive(SemaphoreHandle_t semaphore) { semaphore->held = false; }
+inline void xSemaphoreGive(SemaphoreHandle_t semaphore) {
+    semaphore->mutex.unlock();
+}
+inline void vSemaphoreDelete(SemaphoreHandle_t semaphore) {
+    delete semaphore;
+    --liveMutexes;
+}
 `,
     };
     for (const [name, content] of Object.entries(headers)) {
@@ -51,13 +67,36 @@ inline void xSemaphoreGive(SemaphoreHandle_t semaphore) { semaphore->held = fals
     const source = path.join(directory, 'probe.cpp');
     await writeFile(source, `#include <cassert>
 #include "GpioPinSemaphore.h"
+#include <freertos/FreeRTOS.h>
 #include <soc/soc_caps.h>
 int main() {
-    { GpioPinSemaphore before(2, 0); assert(!before.acquired()); }
+    { GpioPinSemaphore before(2, 0); assert(!before.ready()); assert(!before.acquired()); }
     assert(initializeGpioPinSemaphores());
+    assert(liveMutexes == 0);
+    failNextMutexAllocation = true;
+    {
+        GpioPinSemaphore failed(2, 0);
+        assert(!failed.ready());
+        assert(!failed.acquired());
+    }
+    {
+        GpioPinSemaphore first(2, 0);
+        assert(first.ready());
+        assert(first.acquired());
+        GpioPinSemaphore secondPin(3, 0);
+        assert(secondPin.ready());
+        assert(!secondPin.acquired());
+    }
+    assert(liveMutexes == 1);
+    {
+        GpioPinSemaphore retry(3, 0);
+        assert(retry.ready());
+        assert(retry.acquired());
+    }
     for (int pin = -1; pin <= 60; ++pin) {
         GpioPinSemaphore first(pin, 0);
-        assert(first.acquired() == (pin >= 0 && pin < SOC_GPIO_PIN_COUNT));
+        assert(first.ready() == (pin >= 0 && pin < SOC_GPIO_PIN_COUNT));
+        assert(first.acquired() == first.ready());
         if (first.acquired()) {
             GpioPinSemaphore second(pin, 0);
             assert(!second.acquired());
@@ -71,6 +110,7 @@ int main() {
         assert(isGpioOutputCapablePin(pin) == output);
     }
     { GpioPinSemaphore again(2, 0); assert(again.acquired()); }
+    assert(liveMutexes == 1);
 }
 `);
     for (const target of ['classic', 's3']) {

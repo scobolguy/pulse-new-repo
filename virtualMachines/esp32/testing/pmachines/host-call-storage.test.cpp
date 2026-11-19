@@ -47,12 +47,17 @@ int main() {
     }
 
     pmachine::HostExecutionStorage execution;
+    execution.reset();
+    assert(!execution.acquire());
     assert(execution.prepare());
+    auto* frames = execution.frames();
+    assert(frames && !frames->store("local", pmachine::Value(7)));
     assert(execution.strings.attached());
     assert(execution.objects.attached());
     assert(execution.acquire());
     assert(!execution.acquire());
     execution.release();
+    assert(execution.frames() == frames && !frames->find("local"));
     assert(execution.strings.arenaBytes() == pmachine::HostExecutionStorage::STRING_ARENA_BYTES);
     assert(execution.calls.result.text.capacity() >= 1024);
     const std::string text(512, 'x');
@@ -82,4 +87,16 @@ int main() {
     assert(execution.strings.getStats().liveHandles == 0);
     assert(execution.prepare());
     assert(allocations == preparedAllocations);
+    const uint16_t retained = execution.strings.store("retained", 8);
+    assert(retained != pmachine::ManagedStringHeap::INVALID);
+    assert(!execution.prepare(pmachine::ManagedStringHeap::MAX_ARENA));
+    assert(execution.strings.arenaBytes() == pmachine::HostExecutionStorage::STRING_ARENA_BYTES);
+    execution.reset();
+    assert(execution.acquire());
+    assert(!execution.prepare(pmachine::ManagedStringHeap::MAX_ARENA));
+    execution.release();
+    assert(execution.prepare(pmachine::ManagedStringHeap::MAX_ARENA));
+    assert(execution.strings.arenaBytes() == pmachine::ManagedStringHeap::MAX_ARENA);
+    assert(!execution.prepare(pmachine::ManagedStringHeap::MAX_ARENA + 1));
+    assert(execution.strings.store(text.data(), text.size()) != pmachine::ManagedStringHeap::INVALID);
 }

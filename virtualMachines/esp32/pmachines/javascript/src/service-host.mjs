@@ -20,8 +20,10 @@ import { createJsonCollectionBindings } from './json-collection-bindings.mjs';
 import { createJsonObjectBindings } from './json-object-bindings.mjs';
 import { createJsonValueBindings } from './json-value-bindings.mjs';
 import { createXmlBindings } from './xml-bindings.mjs';
+import { xmlEscapeText } from '../../shared/xml/xml-tokenizer.mjs';
 import { HOST_CAPABILITIES_VERSION, HOST_PROFILES, assertHostCapabilities } from '../../shared/contracts/host-capabilities.mjs';
 import { createInventoryClient } from './inventory-client.mjs';
+import { createPmachineRuntimeProfile } from '../../shared/contracts/runtime-profile.mjs';
 
 function failure(message, status = 400) {
   return Object.assign(new Error(message), { status });
@@ -45,12 +47,19 @@ function objectJson(value) {
 }
 
 function writeJsonResponse(response, status, value) {
-  const body = JSON.stringify(value);
+  const isXml = typeof value === 'string' && value.trimStart().startsWith('<');
+  const body = isXml ? value : JSON.stringify(value);
   response.writeHead(status, {
-    'Content-Type': 'application/json',
+    'Content-Type': isXml ? 'application/xml; charset=utf-8' : 'application/json',
     'Cache-Control': 'no-store',
     'Content-Length': Buffer.byteLength(body)
   }).end(body);
+}
+
+function xmlDiagnosticBody(error) {
+  const line = Number.isSafeInteger(error.line) && error.line > 0 ? error.line : 1;
+  const position = Number.isSafeInteger(error.position) && error.position > 0 ? error.position : 1;
+  return `<?xml version="1.0" encoding="UTF-8"?><Pacs008ValidationError xmlns="urn:pulse:pacs008:validation-error:v1"><Message>${xmlEscapeText(error.message)}</Message><Line>${line}</Line><Position>${position}</Position></Pacs008ValidationError>`;
 }
 
 export function createAggregatorCacheSourceResolver({ aggregatorUrl, fetchImpl = fetch }) {
@@ -73,16 +82,17 @@ export function createAggregatorCacheSourceResolver({ aggregatorUrl, fetchImpl =
 export async function createPascalishServiceHost({
   compiled, daemons = [], collectorId, bindings = {}, networkPeers = [], httpAllowedPeers = [],
   host = '127.0.0.1', httpPort = 4300, udpPort = 4210, sharedHttpListener = null,
-  maxEntries = 255, maxTables = 4, maxEvents = 16, maxBodyBytes = 4096,
+  maxEntries = 255, maxTables = 4, maxEvents = 16, maxBodyBytes = 4096, maxXmlStreamNodes = 20000,
   maxStorageBytes = 131072, maxResponseBytes = 262144, maxSteps, maxExecutionMs,
   maxTimers = 8, maxDaemonDatagramBytes = 1024, clock = () => Math.floor(performance.now()), logger = console,
   onDaemonEvent = null, storageRoots = {}, maxFileBytes = 262144, desktopBudget = false,
   distributedBindings = {}, bluetoothSourceFactory = null, filesystemBindingOverrides = {},
   processBindings = {},
   lifecycle = undefined, infrastructureProbe = null, inventoryGrant = null, scheduler = null,
-  cacheSourceResolver = null
+  cacheSourceResolver = null, paymentIo = {}, publishDeliveries = null
 }) {
   if (scheduler !== null && !(scheduler instanceof PMachineScheduler)) throw failure('Invalid pmachine scheduler');
+  if (publishDeliveries !== null && typeof publishDeliveries !== 'function') throw failure('Invalid broker delivery publisher');
   if (compiled?.programMap?.hostBindingsVersion !== SERVICE_HOST_BINDINGS_VERSION
     || compiled.programMap.runtimeUnit?.kind !== 'service') throw failure('Unsupported service host contract');
   if (!distributedBindings || typeof distributedBindings !== 'object' || Array.isArray(distributedBindings) ||
@@ -117,9 +127,12 @@ export async function createPascalishServiceHost({
   if (httpPort !== null) integer(httpPort, 0, 65535, 'HTTP port');
   if (udpPort !== null) integer(udpPort, 0, 65535, 'UDP port');
   integer(maxDaemonDatagramBytes, 1, 4096, 'maxDaemonDatagramBytes');
-  for (const [name, value] of Object.entries({ maxEntries, maxTables, maxEvents, maxBodyBytes, maxTimers, maxStorageBytes, maxResponseBytes })) {
+  for (const [name, value] of Object.entries({ maxEntries, maxTables, maxEvents, maxTimers, maxStorageBytes })) {
     integer(value, 1, 1000000, name);
   }
+  integer(maxBodyBytes, 1, 20000000, 'maxBodyBytes');
+  integer(maxResponseBytes, 1, 20000000, 'maxResponseBytes');
+  integer(maxXmlStreamNodes, 1, 250000, 'maxXmlStreamNodes');
   if (typeof desktopBudget !== 'boolean') throw failure('Invalid desktopBudget');
   if (maxSteps === undefined) maxSteps = desktopBudget ? null : 100000;
   if (maxExecutionMs === undefined) maxExecutionMs = desktopBudget ? null : 2000;
@@ -145,7 +158,7 @@ export async function createPascalishServiceHost({
     });
   let lifecycleRuntime;
   const filesystem = await createFilesystemBindings(storageRoots, {
-    maxFileBytes: Math.min(maxFileBytes, maxResponseBytes), maxPageBytes: maxResponseBytes
+    maxFileBytes: Math.min(maxFileBytes, maxResponseBytes), maxPageBytes: Math.min(maxResponseBytes, 1000000)
   });
   const pmachineBindingNames = [
     'host.pmachine_network_ready', 'host.pmachine_install_bundle', 'host.pmachine_start',
@@ -153,13 +166,15 @@ export async function createPascalishServiceHost({
     'host.pmachine_restore', 'host.pmachine_boot_fixed'
   ];
   const hasPmachineControl = pmachineBindingNames.every(name => typeof processBindings[name] === 'function');
-  const cobolLibrary = createCobolHostLibrary({ ...filesystem.handlers, ...filesystemBindingOverrides });
+  const cobolLibrary = createCobolHostLibrary({ ...filesystem.handlers, ...filesystemBindingOverrides }, {
+    portableIo: paymentIo
+  });
   const inventoryApply = inventoryGrant === null ? null : createInventoryClient(inventoryGrant);
   const capabilities = {
     version: HOST_CAPABILITIES_VERSION,
     ...HOST_PROFILES.js,
     filesystem: filesystem.roots,
-    supported: [...filesystem.capabilities,
+    supported: [...HOST_PROFILES.js.capabilities, ...filesystem.capabilities, ...cobolLibrary.capabilities,
       ...(typeof filesystemBindingOverrides['host.fs_read_text'] === 'function'
         && typeof filesystemBindingOverrides['host.fs_exists'] === 'function' ? ['filesystem.read'] : []),
       ...(typeof filesystemBindingOverrides['host.fs_write_text'] === 'function' ? ['filesystem.write'] : []),
@@ -170,6 +185,25 @@ export async function createPascalishServiceHost({
       ...(hasPmachineControl ? ['pmachine.control'] : []),
       ...(networkPeers.length ? ['filesystem.remote'] : [])],
     limits: { maxBodyBytes, maxResponseBytes, maxSteps, maxExecutionMs, ...filesystem.limits }
+  };
+  const runtimeProfile = () => {
+    const schedulerStatus = scheduler?.getStatus();
+    return createPmachineRuntimeProfile('js', {
+      supportedHostCapabilities: capabilities.supported,
+      execution: {
+        model: scheduler ? 'cooperative-scheduler' : 'single-threaded-event-loop',
+        cpuParallelism: 1,
+        maxConcurrentPrograms: scheduler?.maxContexts ?? maxEvents,
+        schedulerSlots: scheduler?.slots ?? 1,
+        activePrograms: schedulerStatus?.active ?? 0,
+        availableSlots: schedulerStatus?.available ?? 1
+      },
+      limits: {
+        maxRequestBytes: maxBodyBytes, maxResponseBytes, maxEvents,
+        maxSteps: maxSteps ?? null, maxExecutionMs: maxExecutionMs ?? null
+      },
+      resources: { filesystemRoots: Object.keys(storageRoots).length, maxStorageBytes }
+    });
   };
   assertHostCapabilities(compiled.programMap, instructions, capabilities.supported);
   const mappingsById = parseProgramMapMappings(compiled.programMap);
@@ -449,7 +483,7 @@ export async function createPascalishServiceHost({
         ...processBindings,
         ...createJsonCollectionBindings(),
         ...createJsonValueBindings(),
-        ...createXmlBindings({ maxBytes: maxBodyBytes }),
+        ...createXmlBindings({ maxBytes: maxBodyBytes, streamMaxNodes: maxXmlStreamNodes }),
         'host.text_hash': value => createHash('sha256').update(value, 'utf16le').digest('hex'),
         'host.text_hash_utf8': value => createHash('sha256').update(value, 'utf8').digest('hex'),
         'host.text_split_whitespace': value => JSON.stringify(value.split(/[ \t\r\n]+/).filter(Boolean)),
@@ -485,7 +519,23 @@ export async function createPascalishServiceHost({
         'host.replica_clearlocal': name => replica(name).clearLocal(),
         'host.cache_snapshot': async (name, cursor, revision) =>
           JSON.stringify(await cacheSnapshot(name, cursor, revision, 2)),
-        'host.raise_error': (message) => { throw failure(`Program failure: ${text(message, 'failure message')}`, 500); },
+        'host.raise_error': message => {
+          const value = text(message, 'failure message');
+          const response = /^XML_RESPONSE\|(400|422)\|([\s\S]*)$/.exec(value);
+          if (response) {
+            throw Object.assign(new Error(response[2]), { status: Number(response[1]), xml: response[2] });
+          }
+          const diagnostic = /^XML_DIAGNOSTIC\|(\d+)\|(\d+)\|([\s\S]*)$/.exec(value);
+          if (diagnostic) {
+            throw Object.assign(new Error(diagnostic[3]), {
+              status: 400,
+              line: Number(diagnostic[1]),
+              position: Number(diagnostic[2]),
+              xmlDiagnostic: true
+            });
+          }
+          throw failure(`Program failure: ${value}`, 500);
+        },
         'host.json_append': (json, key, value) => {
           const object = objectJson(json);
           text(key, 'JSON key');
@@ -592,6 +642,11 @@ export async function createPascalishServiceHost({
       }
       if (result.stepLimitHit || result.error) throw failure(result.error || 'Service instruction limit exceeded', 500);
       if (Buffer.byteLength(JSON.stringify(result.response)) > maxResponseBytes) throw failure('Response capacity exceeded', 503);
+      if (result.deliveries.length) {
+        if (!publishDeliveries) throw failure('Broker delivery publisher is not configured', 503);
+        signal.throwIfAborted();
+        await publishDeliveries(result.deliveries, { signal });
+      }
       return { status, body: result.response };
     }).finally(() => { pending -= 1; });
     tail = work.catch(logError);
@@ -754,7 +809,11 @@ export async function createPascalishServiceHost({
             return;
           }
           if (req.method === 'GET' && requestPath === '/pmachine/service_host/status') {
-            writeJsonResponse(res, 200, { running, collectorId, bootId, capabilities,
+            writeJsonResponse(res, 200, {
+              running, collectorId, bootId,
+              hostBindingsVersion: SERVICE_HOST_BINDINGS_VERSION,
+              hostCapabilitiesVersion: HOST_CAPABILITIES_VERSION,
+              capabilities, runtimeProfile: runtimeProfile(),
               serviceCapabilities: {
                 ...getServiceCapabilities(),
                 state: running ? 'running' : closed ? 'stopped' : 'created',
@@ -769,6 +828,10 @@ export async function createPascalishServiceHost({
               } : {}),
               daemons: [...units.values()].map(unit => ({ id: unit.id, ...unit.stats })),
               replicas: [...replicas.values()].map(replica => replica.status()) });
+            return;
+          }
+          if (req.method === 'GET' && requestPath === '/pmachine/runtime/profile') {
+            writeJsonResponse(res, 200, runtimeProfile());
             return;
           }
           if (req.method === 'GET' && requestPath === '/pmachine/service_host/capabilities') {
@@ -789,7 +852,10 @@ export async function createPascalishServiceHost({
           if (!res.destroyed) writeJsonResponse(res, result.status, result.body);
         } catch (error) {
           logError(error);
-          if (!res.destroyed) writeJsonResponse(res, error.status || 500, { error: error.message });
+          if (!res.destroyed) {
+            writeJsonResponse(res, error.status || 500,
+              error.xml || (error.xmlDiagnostic ? xmlDiagnosticBody(error) : { error: error.message }));
+          }
         } finally { requests.delete(req); }
       });
       server.requestTimeout = 10000;
@@ -876,6 +942,8 @@ export async function createPascalishServiceHost({
     }),
     getServiceCapabilities,
     getStatus: () => ({ running, hostBindingsVersion: SERVICE_HOST_BINDINGS_VERSION,
+      hostCapabilitiesVersion: HOST_CAPABILITIES_VERSION,
+      runtimeProfile: runtimeProfile(),
       serviceCapabilities: {
         ...getServiceCapabilities(),
         state: running ? 'running' : closed ? 'stopped' : 'created',

@@ -22,6 +22,11 @@ constexpr size_t BODY_LIMIT = 2048, RESPONSE_LIMIT = 20480, STORAGE_LIMIT = 1638
 constexpr uint32_t REPORT_INTERVAL_MS = 10000;
 constexpr uint32_t OUTBOUND_TIMEOUT_MS = 1200;
 constexpr size_t OUTBOUND_RESPONSE_LIMIT = 2048;
+constexpr uint32_t INTERNAL_HEAP_CAPS = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+constexpr size_t LEGACY_UDP_RESERVE = 32 * 1024;
+// Owned daemon sockets avoid WiFiUDP's separate packet buffers. Keep headroom for Wi-Fi
+// and check it again after binding, when lwIP has actually allocated its socket state.
+constexpr size_t DAEMON_UDP_RESERVE = 16 * 1024;
 
 // ESP-IDF ships a 0-byte C++ emergency exception pool, so a second bad_alloc raised while
 // the heap is exhausted aborts the chip. Error text is therefore truncated to the string's
@@ -329,7 +334,9 @@ const Binding bindings[] = {
     {"udp_exchange", "sisii", true}, {"udp_send", "sis", false},
     {"network_peer_allowed", "si", false}, {"local_ipv4_subnets", "", true},
     {"local_ipv4_batch", "ii", true},
+#if !defined(PULSE_DISABLE_BLE_DISCOVERY)
     {"bluetooth_scan", "i", true},
+#endif
     {"camera_discover", "", true},
     {"network_discovery_step", "", true},
     {"filesystem_post", "sissi", true},
@@ -375,6 +382,19 @@ bool sortableTimestamp(const char* value) {
 
 ServiceHost::ServiceHost() {
     machine.setHostCallHook(call, this);
+}
+
+void* ServiceHost::BulkJsonAllocator::allocate(size_t size) {
+    return reallocate(nullptr, size);
+}
+
+void ServiceHost::BulkJsonAllocator::deallocate(void* pointer) {
+    std::free(pointer);
+}
+
+void* ServiceHost::BulkJsonAllocator::reallocate(void* pointer, size_t size) {
+    const uint32_t caps = psramFound() ? MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT : INTERNAL_HEAP_CAPS;
+    return heap_caps_realloc(pointer, size, caps);
 }
 
 bool ServiceHost::parseJson(const std::string& json, JsonDocument& doc) {
@@ -423,7 +443,7 @@ ServiceHost::SerializeResult ServiceHost::serializeValue(JsonVariantConst value,
     if (result == SerializeResult::ok) {
         out.clear();
         try {
-            written = serializeBufferedJson(value, size, jsonOutputBuffer, out);
+            written = serializeBufferedJson(value, size, out);
             if (written != size) result = SerializeResult::noMemory;
         } catch (const std::bad_alloc&) {
             result = SerializeResult::noMemory;
@@ -506,6 +526,24 @@ bool ServiceHost::loadImage(FederatedFileSystem& ffs, const String& path, const 
 bool ServiceHost::validateUnit(const JsonDocument& map, const char* kind, Unit& out, std::string& error) {
     if (map["hostBindingsVersion"] != 1 || std::string(map["runtimeUnit"]["kind"] | "") != kind) {
         error = "Unsupported hosted image metadata"; return false;
+    }
+    if (!map["hostCapabilitiesVersion"].isNull() && map["hostCapabilitiesVersion"] != 1) {
+        error = "Unsupported host capabilities version"; return false;
+    }
+    if (map["requiredHostCapabilities"].is<JsonArrayConst>()) {
+        for (JsonVariantConst item : map["requiredHostCapabilities"].as<JsonArrayConst>()) {
+            if (!item.is<const char*>()) {
+                error = "Invalid required host capability"; return false;
+            }
+            const std::string capability = item.as<const char*>();
+            if (capability == "xml.stream" || capability == "xml.dom" || capability == "payment.parse"
+#if defined(PULSE_DISABLE_BLE_DISCOVERY)
+                || capability == "bluetooth.discovery"
+#endif
+            ) {
+                error = "ESP32 runtime does not provide host capability " + capability; return false;
+            }
+        }
     }
     if (std::string(kind) == "service" && !map["serviceLifecycle"].isNull()) {
         const JsonVariantConst lifecycle = map["serviceLifecycle"];
@@ -705,7 +743,6 @@ bool ServiceHost::validateUnit(const JsonDocument& map, const char* kind, Unit& 
 }
 
 namespace {
-const char* const STRING_SWAP_PATH = "/pmachine-swap.bin";
 const size_t FFS_STRING_SWAP_BUDGET = 32768;
 const size_t PSRAM_STRING_SWAP_BUDGET = 262144;
 void* psramAllocate(size_t size) { return heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT); }
@@ -716,17 +753,45 @@ bool ServiceHost::FfsSwapFile::open() {
     if (file) return true;
     // Opening allocates VFS state; refuse rather than abort when the heap is nearly gone.
     if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < 4096) return false;
-    try { file = ffs.openRandomAccessFile(STRING_SWAP_PATH); }
+    try {
+        if (ffs.pagingBackend() == FFSBackend::SD) {
+            if (!path[0]) snprintf(path, sizeof(path), "/pmachine-strings-%08lx%08lx-%p.swap",
+                static_cast<unsigned long>(esp_random()), static_cast<unsigned long>(esp_random()),
+                static_cast<void*>(this));
+            file = ffs.openPagingFile(path);
+        } else {
+            file = ffs.openRemoteVirtualFile();
+        }
+    }
     catch (const std::bad_alloc&) { return false; }
     return static_cast<bool>(file);
 }
 
+ServiceHost::FfsSwapFile::~FfsSwapFile() {
+    if (!file) return;
+    file.close();
+    if (!path[0]) return;  // FFS owns the lifetime of the remote .virtual file.
+    const auto status = ffs.removePagingFile(path);
+    if (status != FFSStatus::OK && status != FFSStatus::ERR_NOT_FOUND)
+        Serial.printf("[SERVICE-HOST] Failed to remove string paging file: %s\n", path);
+}
+
 bool ServiceHost::FfsSwapFile::writeAt(size_t offset, const uint8_t* data, size_t size) {
-    return open() && file.seek(offset) && file.write(data, size) == size;
+    try {
+        if (!open() || !file.seek(offset) || file.write(data, size) != size) return false;
+        file.flush();
+        return true;
+    } catch (const std::bad_alloc&) {
+        return false;
+    }
 }
 
 bool ServiceHost::FfsSwapFile::readAt(size_t offset, uint8_t* data, size_t size) {
-    return open() && file.seek(offset) && file.read(data, size) == size;
+    try {
+        return open() && file.seek(offset) && file.read(data, size) == size;
+    } catch (const std::bad_alloc&) {
+        return false;
+    }
 }
 
 // PSRAM is preferred when present; otherwise evicted blocks spill to a bounded FFS file.
@@ -740,6 +805,8 @@ void ServiceHost::configureStringSwap(FederatedFileSystem* ffs) {
         if (stringSwapFile)
             stringSwap.reset(new (std::nothrow) FileSwapBacking<FfsSwapFile, ManagedStringHeap::HANDLE_CAPACITY>(
                 *stringSwapFile, FFS_STRING_SWAP_BUDGET));
+        if (!ffs->writablePagingReady())
+            Serial.println("[SERVICE-HOST] Paging awaits SD or remote FFS; local flash is prohibited");
     }
     executionStorage.strings.setBacking(stringSwap.get());
     if (stringSwap) Serial.printf("[SERVICE-HOST] String arena %u bytes; swap backing=%s\n",
@@ -797,12 +864,25 @@ bool ServiceHost::prepare(std::string& error) {
         } catch (const std::bad_alloc&) {
             assignErrorText(error, "Cannot reserve service host execution buffers"); ok = false;
         }
-        if (ok && !task && xTaskCreate(worker, "pascalish-host", 16384, this, 1, &task) != pdPASS) {
-            error = "Cannot reserve service host worker stack"; ok = false;
+        if (ok && !task) {
+#if defined(PULSE_NETWORK_BOOTSTRAP)
+            task = loopTask.load();
+            if (!task) { error = "Cooperative hosted worker is not initialized"; ok = false; }
+#else
+            if (xTaskCreate(worker, "pascalish-host", 16384, this, 1, &task) != pdPASS) {
+                error = "Cannot reserve service host worker stack"; ok = false;
+            }
+#endif
         }
     }
     xSemaphoreGive(mutex);
     return ok;
+}
+
+void* ServiceHost::allocateContextBytes(size_t bytes) {
+    const uint32_t caps = psramFound() ? MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT : INTERNAL_HEAP_CAPS;
+    if (void* memory = heap_caps_malloc(bytes, caps)) return memory;
+    throw std::bad_alloc();
 }
 
 bool ServiceHost::install(Unit newService, Unit newDaemon, const std::string& id, uint16_t port,
@@ -952,16 +1032,16 @@ bool ServiceHost::install(Unit newService, std::vector<DaemonSpec> newDaemons, c
             }
             if (conflict) error = "Duplicate collector ID, UDP port or route; multi-service images need endpoint metadata";
             else {
-                auto context = std::make_shared<Context>();
+                auto context = std::allocate_shared<Context>(ContextAllocator<Context>{});
                 context->daemons.resize(newDaemons.size());
                 context->lastError.reserve(256);
                 if (network.configure(networkPeers, context->network, error)) {
                     Serial.printf("[SERVICE-HOST] Installing id=%s port=%u heap=%u largest=%u\n",
-                        id.c_str(), port, ESP.getFreeHeap(),
-                        static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
+                        id.c_str(), port, static_cast<unsigned>(heap_caps_get_free_size(INTERNAL_HEAP_CAPS)),
+                        static_cast<unsigned>(heap_caps_get_largest_free_block(INTERNAL_HEAP_CAPS)));
                     bool bound = true;
-                    if (ESP.getFreeHeap() < 32768) {
-                        error = "Insufficient heap for hosted UDP socket"; bound = false;
+                    if (port && heap_caps_get_free_size(INTERNAL_HEAP_CAPS) < LEGACY_UDP_RESERVE) {
+                        error = "Insufficient internal heap for legacy hosted UDP listener"; bound = false;
                     }
                     else if (port && !context->udp.begin(port)) {
                         const int socketError = errno;
@@ -978,13 +1058,27 @@ bool ServiceHost::install(Unit newService, std::vector<DaemonSpec> newDaemons, c
                         daemon.nextTick = now() + (slot == services.begin() ? 0 : 100) + index * 50;
                         context->daemonCount = index + 1;
                         if (!daemon.udpPort) continue;
-                        auto* udp = new OwnedDaemonUdp();
+                        if (heap_caps_get_free_size(INTERNAL_HEAP_CAPS) < DAEMON_UDP_RESERVE) {
+                            error = "Insufficient internal heap reserve for hosted daemon UDP socket";
+                            bound = false;
+                            break;
+                        }
+                        auto* udp = new (std::nothrow) OwnedDaemonUdp();
+                        if (!udp) {
+                            error = "Cannot allocate hosted daemon UDP state"; bound = false;
+                            break;
+                        }
                         daemon.udp.reset(udp);
                         if (!udp->beginOwned(daemon.udpPort, daemon.multicastGroup)) {
                             const int socketError = errno;
                             Serial.printf("[SERVICE-HOST] Daemon UDP bind failed id=%s port=%u errno=%d\n",
                                 id.c_str(), daemon.udpPort, socketError);
-                            error = "Hosted daemon UDP bind failed"; bound = false;
+                            error = "Hosted daemon UDP socket setup failed (errno "
+                                + std::to_string(socketError) + ")";
+                            bound = false;
+                        } else if (heap_caps_get_free_size(INTERNAL_HEAP_CAPS) < DAEMON_UDP_RESERVE) {
+                            error = "Hosted daemon UDP socket would leave insufficient internal heap";
+                            bound = false;
                         }
                     }
                     if (!bound) {
@@ -1270,6 +1364,30 @@ bool ServiceHost::invoke(const std::string& symbol, const std::vector<HostValue>
             details["hardware"] = input["hardware"] | "ESP32";
             details["capabilities"] = output["capabilities"];
             details["dagWorker"] = output["dagWorker"];
+            auto runtimeProfile = details["runtimeProfile"].to<JsonObject>();
+            runtimeProfile["version"] = 1;
+            runtimeProfile["target"] = "esp32";
+            runtimeProfile["runtime"] = "pascalish-esp32";
+            runtimeProfile["profile"] = "embedded";
+            auto contracts = runtimeProfile["contractVersions"].to<JsonObject>();
+            contracts["serviceHostBindings"] = 1;
+            contracts["hostCapabilities"] = 1;
+            contracts["runtimeProfile"] = 1;
+            auto runtimeCapabilities = runtimeProfile["supportedHostCapabilities"].to<JsonArray>();
+            runtimeCapabilities.add("service.transaction");
+#if !defined(PULSE_DISABLE_BLE_DISCOVERY)
+            runtimeCapabilities.add("bluetooth.discovery");
+#endif
+            auto taskCapabilities = runtimeProfile["taskCapabilities"].to<JsonArray>();
+            taskCapabilities.add("pascalish-dag-v1");
+            auto execution = runtimeProfile["execution"].to<JsonObject>();
+            execution["model"] = "single-worker";
+            execution["cpuParallelism"] = 1;
+            execution["maxConcurrentPrograms"] = 1;
+            auto limits = runtimeProfile["limits"].to<JsonObject>();
+            limits["maxRequestBytes"] = BODY_LIMIT;
+            limits["maxResponseBytes"] = RESPONSE_LIMIT;
+            runtimeProfile["resources"].to<JsonObject>();
             auto services = details["services"].to<JsonArray>();
             for (JsonVariantConst advertised : input["services"].as<JsonArrayConst>()) {
                 const std::string name = advertised.is<const char*>() ? advertised.as<std::string>()
@@ -2262,9 +2380,8 @@ void ServiceHost::reporter(void* opaque) {
     }
 }
 
-void ServiceHost::worker(void* context) {
-    auto& host = *static_cast<ServiceHost*>(context);
-    for (;;) {
+bool ServiceHost::workerTurn() {
+        auto& host = *this;
         bool backOff = false;
         if (xSemaphoreTake(host.mutex, 0) == pdTRUE) {
             host.allocationFailed = false;
@@ -2297,6 +2414,21 @@ void ServiceHost::worker(void* context) {
             backOff = host.allocationFailed;
             xSemaphoreGive(host.mutex);
         }
+        return backOff;
+}
+
+#if defined(PULSE_NETWORK_BOOTSTRAP)
+void ServiceHost::pollOnLoop() {
+    if (!task || xTaskGetCurrentTaskHandle() != task) return;
+    if (static_cast<int32_t>(millis() - nextLoopTurn) < 0) return;
+    nextLoopTurn = millis() + (workerTurn() ? 2000 : 10);
+}
+#endif
+
+void ServiceHost::worker(void* context) {
+    auto& host = *static_cast<ServiceHost*>(context);
+    for (;;) {
+        const bool backOff = host.workerTurn();
         // Retrying immediately after bad_alloc keeps the heap fragmented and starves the
         // network stack and execute_file of both memory and the host mutex.
         vTaskDelay(pdMS_TO_TICKS(backOff ? 2000 : 10));
@@ -2351,9 +2483,10 @@ void ServiceHost::diagnostics(JsonObject doc) {
     json["serializationFailures"] = jsonMetrics.serializationFailures;
     json["writeUs"] = jsonMetrics.writeUs;
     auto variables = doc["lastInvocationVariables"].to<JsonObject>();
-    variables["peakSlots"] = executionStorage.frames.slotHighWater();
-    variables["peakNameBytes"] = executionStorage.frames.nameHighWater();
-    variables["peakDepth"] = executionStorage.frames.depthHighWater();
+    const auto* frames = executionStorage.frames();
+    variables["peakSlots"] = frames ? frames->slotHighWater() : 0;
+    variables["peakNameBytes"] = frames ? frames->nameHighWater() : 0;
+    variables["peakDepth"] = frames ? frames->depthHighWater() : 0;
     const auto& heap = executionStorage.strings;
     const auto& heapStats = heap.getStats();
     auto strings = doc["lastInvocationStrings"].to<JsonObject>();
@@ -2391,21 +2524,57 @@ bool ServiceHost::runningCollectorIds(std::vector<std::string>& ids) {
     return true;
 }
 
-std::string ServiceHost::status(const std::string& id) {
-    if (!mutex) return "{\"running\":false,\"hostBindingsVersion\":1}";
+ServiceHost::Status ServiceHost::status(const std::string& id) {
+    if (!mutex) return {200, "{\"running\":false,\"hostBindingsVersion\":1}"};
     if (xSemaphoreTake(mutex, 0) != pdTRUE)
-        return "{\"busy\":true,\"hostBindingsVersion\":1,\"executionModel\":\"single-worker\"}";
+        return {503, "{\"busy\":true,\"hostBindingsVersion\":1,\"executionModel\":\"single-worker\"}"};
     SemaphoreRelease release{mutex};
     try {
-    JsonDocument doc;
-    doc["running"] = active.load(); doc["hostBindingsVersion"] = 1; doc["runtime"] = "pascalish-esp32";
+    JsonDocument doc(&bulkJsonAllocator);
+    doc["running"] = active.load(); doc["hostBindingsVersion"] = 1;
+    doc["hostCapabilitiesVersion"] = 1; doc["runtime"] = "pascalish-esp32";
     doc["executionModel"] = "single-worker";
     doc["httpEventCapacity"] = HTTP_EVENT_LIMIT;
     doc["serviceCapacity"] = SERVICE_LIMIT;
+#if defined(PULSE_NETWORK_BOOTSTRAP)
+    doc["workerTaskCount"] = 0;
+    doc["workerUsesArduinoLoop"] = task != nullptr;
+#else
     doc["workerTaskCount"] = task ? 1 : 0;
+#endif
     doc["hostImageResident"] = true;
     doc["hostProcedureLocals"] = true;
     doc["hostCobolText"] = true;
+    auto runtimeProfile = doc["runtimeProfile"].to<JsonObject>();
+    runtimeProfile["version"] = 1;
+    runtimeProfile["target"] = "esp32";
+    runtimeProfile["runtime"] = "pascalish-esp32";
+    runtimeProfile["profile"] = "embedded";
+    auto contracts = runtimeProfile["contractVersions"].to<JsonObject>();
+    contracts["serviceHostBindings"] = 1;
+    contracts["hostCapabilities"] = 1;
+    contracts["runtimeProfile"] = 1;
+    auto supportedHostCapabilities = runtimeProfile["supportedHostCapabilities"].to<JsonArray>();
+    supportedHostCapabilities.add("service.transaction");
+#if !defined(PULSE_DISABLE_BLE_DISCOVERY)
+    supportedHostCapabilities.add("bluetooth.discovery");
+#endif
+    auto taskCapabilities = runtimeProfile["taskCapabilities"].to<JsonArray>();
+    taskCapabilities.add("pascalish-dag-v1");
+    auto execution = runtimeProfile["execution"].to<JsonObject>();
+    execution["model"] = "single-worker";
+    execution["cpuParallelism"] = 1;
+    execution["maxConcurrentPrograms"] = 1;
+    auto limits = runtimeProfile["limits"].to<JsonObject>();
+    limits["maxRequestBytes"] = BODY_LIMIT;
+    limits["maxResponseBytes"] = RESPONSE_LIMIT;
+    limits["serviceCapacity"] = SERVICE_LIMIT;
+    limits["httpEventCapacity"] = HTTP_EVENT_LIMIT;
+    auto resources = runtimeProfile["resources"].to<JsonObject>();
+    resources["freeHeapBytes"] = ESP.getFreeHeap();
+    resources["largestFreeBlockBytes"] = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    resources["ffsStringSwapBudgetBytes"] = FFS_STRING_SWAP_BUDGET;
+    resources["psramStringSwapBudgetBytes"] = PSRAM_STRING_SWAP_BUDGET;
     auto profiles = doc["hostImageProfiles"].to<JsonArray>();
     profiles.add("storage-backed");
     auto lan = doc["lanDiscovery"].to<JsonObject>();
@@ -2475,16 +2644,20 @@ std::string ServiceHost::status(const std::string& id) {
     } else if (!id.empty()) doc["error"] = "Hosted service not found";
     doc["freeHeapBytes"] = ESP.getFreeHeap();
     doc["largestFreeBlockBytes"] = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    doc["freeInternalHeapBytes"] = heap_caps_get_free_size(INTERNAL_HEAP_CAPS);
+    doc["largestInternalBlockBytes"] = heap_caps_get_largest_free_block(INTERNAL_HEAP_CAPS);
+    doc["freePsramBytes"] = ESP.getFreePsram();
     if (task) doc["workerStackHighWaterBytes"] = uxTaskGetStackHighWaterMark(task);
-    std::string result;
     if (doc.overflowed()) throw std::bad_alloc();
     const auto bytes = measureJson(doc);
-    result.reserve(bytes);
-    if (serializeJson(doc, result) != bytes) throw std::bad_alloc();
+    Status result{!id.empty() && !selected ? 404 : 200, nullptr};
+    result.body.reset(static_cast<char*>(bulkJsonAllocator.allocate(bytes + 1)));
+    if (!result.body || serializeJson(doc, result.body.get(), bytes + 1) != bytes)
+        throw std::bad_alloc();
     return result;
     } catch (const std::bad_alloc&) {
         Serial.println("[SERVICE-HOST] Status allocation failed");
-        return "{\"error\":\"Hosted status allocation failed\",\"unavailable\":true}";
+        return {503, "{\"error\":\"Hosted status allocation failed\",\"unavailable\":true}"};
     }
 }
 
@@ -2509,6 +2682,8 @@ void ServiceHost::daemonDiagnostics(JsonArray list, const Context& context) {
         if (daemon.unit.image) {
             item["instructionCount"] = daemon.unit.image->size();
             item["instructionStorage"] = daemon.unit.image->isResident() ? "psram-resident" : "ffs-paged";
+            item["instructionHashStorage"] = daemon.unit.image->hashStorage();
+            item["instructionHashBytes"] = daemon.unit.image->hashStorageBytes();
         }
     }
 }
@@ -2533,6 +2708,8 @@ void ServiceHost::describe(JsonObject doc, const Context& context, bool details)
         const auto cache = HostedImage::cacheStats();
         doc["instructionStorage"] = service.image->isResident() ? "psram-resident" : "ffs-paged";
         doc["instructionCount"] = service.image->size();
+        doc["instructionHashStorage"] = service.image->hashStorage();
+        doc["instructionHashBytes"] = service.image->hashStorageBytes();
         doc["instructionPageReads"] = service.image->pageReads;
         doc["instructionCacheHits"] = service.image->cacheHits;
         doc["instructionCacheStorage"] = cache.psram ? "psram" : "internal";

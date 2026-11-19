@@ -9,6 +9,8 @@
 #include "network_bindings.h"
 #include "assemblerish_hal.h"
 #include "hosted_http_response.h"
+#include "boot/policy_runtime.h"
+#include "../../shared/slot-scheduler/slot_scheduler_pcode.h"
 #include <new>
 #include <AsyncJson.h>
 #include <atomic>
@@ -327,6 +329,7 @@ extern bool pmachineInvokeFsm(
 #include <cctype>
 #include <atomic>
 #if defined(ESP32)
+#include <esp_heap_caps.h>
 #include <mbedtls/md.h>
 #elif defined(ESP8266)
 #include <bearssl/bearssl_hmac.h>
@@ -529,29 +532,9 @@ public:
 };
 
 std::atomic<bool> hostedInstallBusy{false};
-QueueHandle_t inlineExecutionQueue = nullptr;
-
-bool ensureInlineExecutionWorker() {
-    if (inlineExecutionQueue) return true;
-    auto queue = xQueueCreate(1, sizeof(std::function<void()>*));
-    if (!queue) return false;
-    if (xTaskCreate([](void* context) {
-            const auto queue = static_cast<QueueHandle_t>(context);
-            for (;;) {
-                std::function<void()>* work = nullptr;
-                if (xQueueReceive(queue, &work, portMAX_DELAY) != pdTRUE) continue;
-                esp_task_wdt_add(nullptr);
-                (*work)();
-                delete work;
-                esp_task_wdt_delete(nullptr);
-            }
-        }, "inline_pmachine", 16384, queue, 1, nullptr) != pdPASS) {
-        vQueueDelete(queue);
-        return false;
-    }
-    inlineExecutionQueue = queue;
-    return true;
-}
+#if defined(PULSE_NETWORK_BOOTSTRAP)
+std::atomic<std::function<void()>*> pendingLoopHostedInstall{nullptr};
+#endif
 #endif
 
 struct EdgeIngressConfig {
@@ -1615,9 +1598,18 @@ bool deserializeProgramMapForExec(const String& path, FederatedFileSystem* ffs, 
         File input;
         if (ffs) input = ffs->openReadFile(path);
         else if (ensureLittleFsReady()) input = LittleFS.open(path, "r");
-        if (!input || !input.size() || input.size() > 32768 || filter.overflowed()) return false;
+        if (!input || !input.size() || input.size() > 32768 || filter.overflowed()) {
+            Serial.printf("[PMACHINE] Hosted map unavailable: %s (%u bytes, filter overflow=%d)\n",
+                path.c_str(), static_cast<unsigned>(input ? input.size() : 0), filter.overflowed());
+            return false;
+        }
+#if defined(PULSE_NETWORK_BOOTSTRAP)
+        if (ffs && ffs->backend() != FFSBackend::Remote && !input.setBufferSize(512))
+            Serial.println("[PMACHINE] Could not reduce hosted map read buffer");
+#endif
         const auto parsed = deserializeJson(doc, input, DeserializationOption::Filter(filter));
         input.close();
+        if (parsed) Serial.printf("[PMACHINE] Hosted map parse failed: %s: %s\n", path.c_str(), parsed.c_str());
         return !parsed;
     }
 
@@ -3555,7 +3547,12 @@ PMachineFileExecutionResult executePMachineFile(
         }
         binaryBytes = binary.size();
         const size_t programLimit = maxBytes > 0 ? maxBytes : binaryBytes;
-        machine.loadProgram(std::move(binary), std::string(file.c_str()), programLimit);
+        if (!machine.loadProgram(std::move(binary), std::string(file.c_str()), programLimit,
+                                 !policy.hasResidentLoad)) {
+            result.statusCode = 507;
+            result.body = machine.getProgramLoadError();
+            return result;
+        }
     }
     machine.clearRoutingDeliveries();
 #if defined(ESP32)
@@ -3698,6 +3695,10 @@ pmachine::ServiceHost& hostedServiceHost() {
     static pmachine::ServiceHost host;
     return host;
 }
+std::function<void()> pendingHostedRestore;
+std::atomic<bool> slotStorageReady{false};
+std::atomic<unsigned> managedSlotCount{0};
+std::function<void()> pollSlotRecovery;
 }
 
 void collectPMachineDiagnostics(JsonObject doc) {
@@ -3707,9 +3708,35 @@ void collectPMachineDiagnostics(JsonObject doc) {
 
 void configurePMachineHostedStorage(FederatedFileSystem& ffs) {
 #if defined(ESP32)
+#if defined(PULSE_NETWORK_BOOTSTRAP)
+    hostedServiceHost().bindLoopTask();
+#endif
     hostedServiceHost().setStorage(ffs);
+    slotStorageReady = true;
+    if (pendingHostedRestore) {
+        auto restore = std::move(pendingHostedRestore);
+        pendingHostedRestore = {};
+        restore();
+    }
 #else
     (void)ffs;
+#endif
+}
+
+#if defined(ESP32) && defined(PULSE_NETWORK_BOOTSTRAP)
+void pollPMachineHostedLoop() {
+    if (auto* work = pendingLoopHostedInstall.exchange(nullptr)) {
+        std::unique_ptr<std::function<void()>> job(work);
+        (*job)();
+        hostedInstallBusy.store(false);
+    }
+    hostedServiceHost().pollOnLoop();
+}
+#endif
+
+void pollPMachineSlotScheduler() {
+#if defined(ESP32)
+    if (pollSlotRecovery) pollSlotRecovery();
 #endif
 }
 
@@ -3780,14 +3807,51 @@ bool directoryContains(File& directory, const char* name) {
 }
 }
 
+namespace {
+class BundleJsonAllocator final : public ArduinoJson::Allocator {
+    const uint32_t caps = MALLOC_CAP_8BIT | (psramFound() ? MALLOC_CAP_SPIRAM : MALLOC_CAP_INTERNAL);
+public:
+    void* allocate(size_t size) override { return heap_caps_malloc(size, caps); }
+    void deallocate(void* pointer) override { heap_caps_free(pointer); }
+    void* reallocate(void* pointer, size_t size) override { return heap_caps_realloc(pointer, size, caps); }
+};
+
+int verifySchedulerEntry(FederatedFileSystem& ffs, const String& path, const char* expected) {
+    auto file = ffs.openReadFile(path);
+    if (!file || !file.size()) return 404;
+    mbedtls_sha256_context sha;
+    mbedtls_sha256_init(&sha);
+    bool ok = mbedtls_sha256_starts_ret(&sha, 0) == 0;
+    uint8_t buffer[512], digest[32];
+    for (size_t remaining = file.size(); ok && remaining;) {
+        const size_t count = std::min(remaining, sizeof(buffer));
+        ok = file.read(buffer, count) == count && mbedtls_sha256_update_ret(&sha, buffer, count) == 0;
+        remaining -= count;
+    }
+    ok = ok && mbedtls_sha256_finish_ret(&sha, digest) == 0;
+    mbedtls_sha256_free(&sha);
+    if (!ok) return 503;
+    if (strlen(expected) != 64) return 409;
+    const char hex[] = "0123456789abcdef";
+    for (size_t byte = 0; byte < sizeof(digest); ++byte) {
+        if (expected[2 * byte] != hex[digest[byte] >> 4] || expected[2 * byte + 1] != hex[digest[byte] & 15])
+            return 409;
+    }
+    return 200;
+}
+}
+
 static bool loadHostedBundleUnit(FederatedFileSystem& ffs, const String& unitPath,
                                  const String& mapPath, const char* kind,
                                  pmachine::ServiceHost::Unit& unit, std::string& error) {
-    JsonDocument map;
-    if (!deserializeDocFromPath(mapPath, &ffs, map)) {
+    BundleJsonAllocator allocator;
+    JsonDocument map(&allocator);
+    auto mapFile = ffs.openReadFile(mapPath);
+    if (!mapFile || deserializeJson(map, mapFile)) {
         error = "Unable to load hosted bundle artifacts";
         return false;
     }
+    mapFile.close();
     if (std::string(map["hostImageFormat"] | "") == "PHI1") {
         return pmachine::ServiceHost::loadImage(ffs, unitPath, map, kind,
             PROFILE_PCODE_SIGNING_KEY, PROFILE_PCODE_SIGNING_KEY_ID, unit, error);
@@ -3804,38 +3868,322 @@ static bool loadHostedBundleUnit(FederatedFileSystem& ffs, const String& unitPat
     }
     return pmachine::ServiceHost::parseUnit(std::string(pcode.c_str()), map, kind, unit, error);
 }
+
+namespace {
+class SlotScheduler {
+    struct Slot {
+        std::string descriptor, entryPath, mapPath, collectorId;
+        pmachine::ServiceHost::Unit service;
+        std::vector<pmachine::ServiceHost::DaemonSpec> daemons;
+        bool transient = false, running = false;
+    };
+    FederatedFileSystem* ffs;
+    pmachine::PMachine& foreground;
+    std::map<int, Slot> slots;
+    std::vector<pmachine::PInstruction> instructions;
+    std::map<std::string, std::vector<std::string>> signatures;
+    std::atomic_flag busy = ATOMIC_FLAG_INIT;
+    bool recovered = false;
+    std::string operation, requestBody, lastError, responseBody;
+    int responseStatus = 500;
+
+    static bool manifestBase(const std::string& path, String& base) {
+        const String value(path.c_str());
+        const String prefix("/pmachine/programs/");
+        const String suffix("/manifest.json");
+        if (!value.startsWith(prefix) || !value.endsWith(suffix)) return false;
+        const String name = value.substring(prefix.length(), value.length() - suffix.length());
+        if (!safeBundleName(name.c_str())) return false;
+        base = prefix + name;
+        return true;
+    }
+
+    int stage(int index, const std::string& descriptor) {
+        if (index < 1 || index > 16 || slots.count(index)) {
+            lastError = "Invalid or occupied installation slot"; return 409;
+        }
+        BundleJsonAllocator allocator;
+        JsonDocument doc(&allocator);
+        if (deserializeJson(doc, descriptor) || !doc.is<JsonObject>()) {
+            lastError = "Invalid installation descriptor"; return 400;
+        }
+        String base;
+        if (!manifestBase(doc["manifestPath"] | "", base) || doc["slot"] != index) {
+            lastError = "Invalid installation identity"; return 400;
+        }
+        JsonObjectConst manifest = doc["manifest"];
+        const std::string kind = doc["kind"] | "";
+        const String storagePath(manifest["storagePath"] | "");
+        const String versionPrefix = base + "/versions/";
+        const char* entry = manifest["entry"] | "";
+        const char* mapFile = manifest["programMap"] | "program.map.json";
+        if ((kind != "service" && kind != "daemon" && kind != "transient")
+            || kind != (manifest["type"] | "")
+            || !storagePath.startsWith(versionPrefix)
+            || !safeBundlePath(storagePath.substring(versionPrefix.length()).c_str())
+            || !safeBundlePath(entry) || !safeBundlePath(mapFile)) {
+            lastError = "Invalid bundle paths or kind"; return 400;
+        }
+        Slot slot;
+        slot.descriptor = descriptor;
+        slot.entryPath = (storagePath + "/" + entry).c_str();
+        slot.mapPath = (storagePath + "/" + mapFile).c_str();
+        slot.collectorId = "scheduler-slot-" + std::to_string(index);
+        slot.transient = kind == "transient";
+        const int verification = verifySchedulerEntry(*ffs, slot.entryPath.c_str(), manifest["sha256"] | "");
+        if (verification != 200) {
+            lastError = verification == 404 ? "Bundle entry is unavailable"
+                : verification == 409 ? "Bundle entry digest validation failed" : "Bundle entry read failed";
+            return verification;
+        }
+        if (slot.transient) {
+            String pcode, signatureError;
+            JsonDocument map(&allocator);
+            if (!readTextFromPath(slot.entryPath.c_str(), ffs, pcode)
+                || !deserializeDocFromPath(slot.mapPath.c_str(), ffs, map)) {
+                lastError = "Transient artifacts are unavailable"; return 404;
+            }
+            if (!verifySignedPcode(pcode, map, signatureError)) {
+                lastError = signatureError.c_str(); return 400;
+            }
+            const std::string runtimeKind = map["runtimeUnit"]["kind"] | "program";
+            if (runtimeKind != "program") {
+                lastError = "Transient entry must be an ordinary program"; return 400;
+            }
+        } else if (kind == "service") {
+            if (!loadHostedBundleUnit(*ffs, slot.entryPath.c_str(), slot.mapPath.c_str(),
+                                      "service", slot.service, lastError)) return 400;
+        } else {
+            const char* serviceEntry = manifest["serviceEntry"] | "";
+            const char* serviceMap = manifest["serviceProgramMap"] | "";
+            if (*serviceEntry || *serviceMap) {
+                if (!safeBundlePath(serviceEntry) || !safeBundlePath(serviceMap)
+                    || !loadHostedBundleUnit(*ffs, storagePath + "/" + serviceEntry,
+                        storagePath + "/" + serviceMap, "service", slot.service, lastError)) return 400;
+            }
+            const auto stageDaemon = [&](JsonObjectConst definition, const String& image,
+                                         const String& map) {
+                const auto port = definition["udpPort"];
+                const auto group = definition["multicastGroup"];
+                if ((definition.containsKey("udpPort") && !port.is<uint16_t>())
+                    || (definition.containsKey("multicastGroup") && !group.is<const char*>())
+                    || ((group | "")[0] && (port | 0) == 0)) {
+                    lastError = "Invalid daemon UDP listener"; return false;
+                }
+                const uint16_t udpPort = port | 0;
+                for (const auto& staged : slot.daemons) {
+                    if (udpPort && staged.udpPort == udpPort) {
+                        lastError = "Duplicate daemon UDP listener port"; return false;
+                    }
+                }
+                pmachine::ServiceHost::DaemonSpec daemon;
+                if (!loadHostedBundleUnit(*ffs, image, map, "daemon", daemon.unit, lastError))
+                    return false;
+                daemon.udpPort = udpPort;
+                daemon.multicastGroup = group | "";
+                slot.daemons.push_back(std::move(daemon));
+                return true;
+            };
+            if (manifest.containsKey("daemons")) {
+                const auto definitions = manifest["daemons"].as<JsonArrayConst>();
+                if (definitions.size() == 0 || definitions.size() > pmachine::ServiceHost::DAEMON_LIMIT) {
+                    lastError = "Expected 1..16 daemon definitions"; return 400;
+                }
+                slot.daemons.reserve(definitions.size());
+                for (JsonObjectConst definition : definitions) {
+                    const char* image = definition["entry"] | "";
+                    const char* map = definition["programMap"] | "";
+                    if (!safeBundlePath(image) || !safeBundlePath(map)) {
+                        lastError = "Invalid multi-daemon artifact paths"; return 400;
+                    }
+                    const String imagePath = storagePath + "/" + image;
+                    const int verified = verifySchedulerEntry(*ffs, imagePath, definition["sha256"] | "");
+                    if (verified != 200) {
+                        lastError = "Multi-daemon entry verification failed"; return verified;
+                    }
+                    if (!stageDaemon(definition, imagePath, storagePath + "/" + map)) return 400;
+                }
+            } else if (!stageDaemon(manifest, slot.entryPath.c_str(), slot.mapPath.c_str())) return 400;
+            if (!slot.service.instructions && !slot.service.image) {
+                const auto& daemon = slot.daemons.front();
+                slot.service.id = slot.collectorId;
+                slot.service.instructions.reset(new std::deque<pmachine::PInstruction>());
+                const auto halt = pmachine::loadTextPCode("HALT\n");
+                slot.service.instructions->assign(halt.begin(), halt.end());
+                slot.service.cacheSchemas = daemon.unit.cacheSchemas;
+                slot.service.cachePolicies = daemon.unit.cachePolicies;
+                slot.service.cacheVirtualSources = daemon.unit.cacheVirtualSources;
+                slot.service.tableCapacities = daemon.unit.tableCapacities;
+                slot.service.hasTableDeclarations = daemon.unit.hasTableDeclarations;
+            }
+        }
+        slots.emplace(index, std::move(slot));
+        ++managedSlotCount;
+        return 200;
+    }
+
+    int activate(int index) {
+        const auto found = slots.find(index);
+        if (found == slots.end() || found->second.running) {
+            lastError = "Slot is absent or already running"; return 409;
+        }
+        auto& slot = found->second;
+        BundleJsonAllocator allocator;
+        JsonDocument descriptor(&allocator);
+        const auto parse = [&] {
+            JsonDocument filter(&allocator);
+            filter["manifest"]["networkPeers"] = true;
+            return filter.overflowed() || deserializeJson(descriptor, slot.descriptor,
+                DeserializationOption::Filter(filter));
+        };
+        if (parse()) {
+            lastError = "Slot descriptor is invalid"; return 500;
+        }
+        if (slot.transient) {
+            const auto result = executePMachineFile(foreground, ffs, slot.entryPath.c_str(),
+                slot.mapPath.c_str(), "", "", 65536, descriptor["manifest"]["networkPeers"]);
+            if (result.statusCode < 200 || result.statusCode >= 300) {
+                lastError = result.body.c_str(); return result.statusCode;
+            }
+            return 200;
+        }
+        if (!hostedServiceHost().install(std::move(slot.service), std::move(slot.daemons),
+                slot.collectorId, 0, 180000, 60000, lastError,
+                descriptor["manifest"]["networkPeers"].as<JsonVariantConst>())) return 409;
+        slot.running = true;
+        return 200;
+    }
+
+    int remove(int index) {
+        const auto found = slots.find(index);
+        if (found == slots.end()) { lastError = "Slot is empty"; return 404; }
+        if (found->second.running
+            && !hostedServiceHost().stop(lastError, found->second.collectorId)) return 409;
+        slots.erase(found);
+        --managedSlotCount;
+        return 200;
+    }
+
+    static bool call(const std::string& name, const std::vector<pmachine::HostValue>& args,
+                     pmachine::HostValue& result, std::string& error, void* context) {
+        return static_cast<SlotScheduler*>(context)->invoke(name, args, result, error);
+    }
+
+    bool invoke(const std::string& name, const std::vector<pmachine::HostValue>& args,
+                pmachine::HostValue& result, std::string& error) {
+        if (name.rfind("host.json_", 0) == 0)
+            return pulse::boot::invokeJson(name, args, result, error);
+        result.isString = false;
+        result.integer = 0;
+        result.text.clear();
+        if (name == "host.scheduler_operation") { result.isString = true; result.text = operation; }
+        else if (name == "host.scheduler_request") { result.isString = true; result.text = requestBody; }
+        else if (name == "host.scheduler_error") { result.isString = true; result.text = lastError; }
+        else if (name == "host.scheduler_slot" && args.size() == 1 && !args[0].isString) {
+            const auto found = slots.find(args[0].integer);
+            result.isString = true;
+            result.text = found == slots.end() ? "{}" : found->second.descriptor;
+        } else if (name == "host.scheduler_read" && args.size() == 1 && args[0].isString) {
+            String base;
+            if (!manifestBase(args[0].text, base)) { error = "Invalid manifest path"; return false; }
+            std::vector<uint8_t> bytes;
+            if (ffs->read(args[0].text.c_str(), bytes) != FFSStatus::OK || bytes.empty()) {
+                error = "Bundle manifest unavailable"; return false;
+            }
+            result.isString = true;
+            result.text.assign(bytes.begin(), bytes.end());
+        } else if (name == "host.scheduler_saved_state") {
+            std::vector<uint8_t> bytes;
+            const auto status = ffs->read("/pmachine/slot-scheduler.json", bytes);
+            if (status != FFSStatus::OK && status != FFSStatus::ERR_NOT_FOUND) {
+                error = "Unable to read scheduler state"; return false;
+            }
+            result.isString = true;
+            result.text = status == FFSStatus::ERR_NOT_FOUND ? "{\"version\":1,\"slots\":[]}"
+                : std::string(bytes.begin(), bytes.end());
+        } else if (name == "host.scheduler_commit" && args.size() == 1 && args[0].isString) {
+            const auto& text = args[0].text;
+            if (!ensureBundleDirectory(*ffs, "/pmachine")
+                || ffs->write("/pmachine/slot-scheduler.json.tmp",
+                    reinterpret_cast<const uint8_t*>(text.data()), text.size()) != FFSStatus::OK
+                || ffs->replace("/pmachine/slot-scheduler.json.tmp",
+                    "/pmachine/slot-scheduler.json") != FFSStatus::OK) {
+                lastError = "Unable to atomically persist scheduler state";
+            } else result.integer = 1;
+        } else if (name == "host.scheduler_stage" && args.size() == 2
+                   && !args[0].isString && args[1].isString) {
+            result.integer = stage(args[0].integer, args[1].text);
+        } else if (name == "host.scheduler_activate" && args.size() == 1 && !args[0].isString) {
+            result.integer = activate(args[0].integer);
+        } else if (name == "host.scheduler_remove" && args.size() == 1 && !args[0].isString) {
+            result.integer = remove(args[0].integer);
+        } else if (name == "host.scheduler_respond" && args.size() == 2
+                   && !args[0].isString && args[1].isString) {
+            if (!responseBody.empty()) { error = "Scheduler responded twice"; return false; }
+            responseStatus = args[0].integer;
+            responseBody = args[1].text;
+            result.integer = 1;
+        } else { error = "Invalid scheduler primitive: " + name; return false; }
+        return true;
+    }
+
+public:
+    SlotScheduler(FederatedFileSystem* fileSystem, pmachine::PMachine& machine)
+        : ffs(fileSystem), foreground(machine) {}
+
+    PMachineFileExecutionResult run(const char* action, const std::string& body = "{}") {
+        if (busy.test_and_set())
+            return {409, "{\"error\":\"Slot scheduler is busy\"}"};
+        struct Unlock {
+            std::atomic_flag& flag;
+            ~Unlock() { flag.clear(); }
+        } unlock{busy};
+        if (!ffs || !slotStorageReady)
+            return {503, "{\"error\":\"Scheduler FFS is unavailable\"}"};
+        if (!recovered && strcmp(action, "restore") != 0)
+            return {503, "{\"error\":\"Scheduler recovery has not completed\"}"};
+        try {
+            if (instructions.empty()) {
+                instructions = pmachine::loadTextPCode(pmachine::SLOT_SCHEDULER_PCODE);
+                JsonDocument map;
+                std::vector<pmachine::MappingDef> mappings;
+                String mapError;
+                if (deserializeJson(map, pmachine::SLOT_SCHEDULER_MAP)
+                    || !loadProgramMapMappingsFromDoc(map, mappings, &signatures, mapError, nullptr)) {
+                    instructions.clear();
+                    return {500, "{\"error\":\"Invalid built-in scheduler metadata\"}"};
+                }
+            }
+            operation = action;
+            requestBody = body;
+            responseStatus = 500;
+            responseBody.clear();
+            lastError.clear();
+            std::string error;
+            if (!pulse::boot::executePolicy(instructions, signatures, call, this, error)
+                || responseBody.empty()) {
+                Serial.printf("[SCHEDULER] Policy execution failed: %s\n", error.c_str());
+                JsonDocument failure;
+                failure["error"] = error.empty() ? "Scheduler did not respond" : error.c_str();
+                String text;
+                serializeJson(failure, text);
+                return {500, text};
+            }
+            if (strcmp(action, "restore") == 0 && responseStatus == 200) recovered = true;
+            return {responseStatus, responseBody.c_str()};
+        } catch (const std::bad_alloc&) {
+            Serial.println("[SCHEDULER] Allocation failed");
+            return {507, "{\"error\":\"Scheduler allocation failed\"}"};
+        }
+    }
+    bool ready() const { return recovered; }
+};
+}
 #endif
 
-bool runPMachineFixedBoot(pmachine::PMachine& machine, FederatedFileSystem* ffs) {
-    constexpr const char* fixedBootPath = "/boot/pmachine-boot";
-    fixedBootState = "recovery";
-    fixedBootReason = "fixed boot file is missing";
-    if (ffs == nullptr) {
-        fixedBootReason = "FFS unavailable";
-        return false;
-    }
-    std::vector<uint8_t> bytes;
-    if (ffs->read(fixedBootPath, bytes) != FFSStatus::OK || bytes.empty()) return false;
-    if (bytes.size() > 65536) {
-        fixedBootReason = "fixed boot file exceeds 65536 bytes";
-        return false;
-    }
-    const std::string source(bytes.begin(), bytes.end());
-    std::vector<pmachine::PInstruction> instructions;
-    try {
-        instructions = pmachine::loadTextPCode(source);
-    } catch (const std::exception&) {
-        fixedBootReason = "fixed boot file is invalid pcode";
-        return false;
-    }
-    if (instructions.empty()) {
-        fixedBootReason = "fixed boot file contains no instructions";
-        return false;
-    }
-    machine.run(instructions);
-    fixedBootState = "ready";
-    fixedBootReason = "fixed boot program executed";
-    return true;
+void setPMachineBootStatus(bool ready, const char* reason) {
+    fixedBootState = ready ? "ready" : "recovery";
+    fixedBootReason = reason ? reason : "LittleFS supervisor unavailable";
 }
 
 void pmachineLearnAggregator(const char* aggregatorId, const char* address, uint16_t httpPort) {
@@ -3855,6 +4203,30 @@ void registerPMachineRoutes(
 #if defined(ESP32)
     static pmachine::ServiceHost& serviceHost = hostedServiceHost();
     static pmachine::PmachineProcessSlots processSlots;
+    static SlotScheduler slotScheduler(ffs, machine);
+    pollSlotRecovery = [] {
+        if (!slotStorageReady || slotScheduler.ready()) return;
+        static unsigned long nextAttempt = 0;
+        if (static_cast<int32_t>(millis() - nextAttempt) < 0) return;
+        nextAttempt = millis() + 5000;
+        const auto result = slotScheduler.run("restore");
+        if (result.statusCode != 200)
+            Serial.printf("[SCHEDULER] Recovery failed (%d): %s\n", result.statusCode, result.body.c_str());
+    };
+    server.on("/api/pmachine/scheduler", HTTP_GET, [](AsyncWebServerRequest* request) {
+        const auto result = slotScheduler.run("status");
+        request->send(result.statusCode, "application/json", result.body);
+    });
+    for (const char* action : {"load", "unload"}) {
+        const String route = String("/api/pmachine/scheduler/") + action;
+        server.addHandler(new AssemblerishInstallWebHandler(route.c_str(),
+            [action](AsyncWebServerRequest* request, JsonDocument& body) {
+                String text;
+                serializeJson(body, text);
+                const auto result = slotScheduler.run(action, text.c_str());
+                request->send(result.statusCode, "application/json", result.body);
+            }));
+    }
     server.on("/pmachine/boot/status", HTTP_GET, [](AsyncWebServerRequest* request) {
         JsonDocument status;
         status["state"] = fixedBootState;
@@ -4091,6 +4463,10 @@ void registerPMachineRoutes(
         request->send(200, "application/json", text);
     });
     server.on("/api/pmachine/stop-all", HTTP_POST, [ffs](AsyncWebServerRequest* request) {
+        if (managedSlotCount) {
+            request->send(409, "text/plain", "Unload scheduler-owned programs through the scheduler API first");
+            return;
+        }
         std::string error;
         if (!serviceHost.stop(error, "")) {
             request->send(503, "text/plain", error.c_str());
@@ -4113,6 +4489,10 @@ void registerPMachineRoutes(
     server.on("^\\/api\\/pmachine\\/programs\\/([A-Za-z0-9_.-]+)$", HTTP_DELETE,
         [ffs](AsyncWebServerRequest* request) {
             const String name = request->pathArg(0);
+            if (managedSlotCount) {
+                request->send(409, "text/plain", "Unload scheduler-owned programs before deleting bundles");
+                return;
+            }
             if (!safeBundleName(name.c_str())) {
                 request->send(400, "text/plain", "Invalid bundle name");
                 return;
@@ -4138,6 +4518,10 @@ void registerPMachineRoutes(
             request->send(200, "application/json", "{\"removed\":true}");
         });
     server.on("/api/pmachine/programs", HTTP_DELETE, [ffs](AsyncWebServerRequest* request) {
+        if (managedSlotCount) {
+            request->send(409, "text/plain", "Unload scheduler-owned programs before deleting bundles");
+            return;
+        }
         std::string error;
         if (!serviceHost.stop(error, "")) {
             request->send(503, "text/plain", error.c_str());
@@ -4412,18 +4796,6 @@ void registerPMachineRoutes(
             bundleRunBusy.clear();
             request->send(execution.statusCode, "application/json", execution.body);
         });
-    if (ffs != nullptr) {
-        std::vector<uint8_t> savedState;
-        if (ffs->read("/pmachine/process-slots.json", savedState) == FFSStatus::OK
-            && !savedState.empty()) {
-            std::string restoreError;
-            if (!processSlots.restore(
-                    std::string(savedState.begin(), savedState.end()), restoreError)) {
-                Serial.printf("[PMACHINE] Ignoring invalid process slot state: %s\n",
-                              restoreError.c_str());
-            }
-        }
-    }
     server.on("/pmachine/process-slots", HTTP_GET, [](AsyncWebServerRequest* request) {
         JsonDocument out;
         JsonArray slots = out["slots"].to<JsonArray>();
@@ -4534,6 +4906,16 @@ void registerPMachineRoutes(
         if (!pmachine::stopAssemblerish(error)) { request->send(409, "text/plain", error.c_str()); return; }
         request->send(200, "application/json", "{\"ok\":true,\"installed\":false}");
     });
+    pendingHostedRestore = [ffs] {
+    if (ffs != nullptr) {
+        std::vector<uint8_t> savedState;
+        if (ffs->read("/pmachine/process-slots.json", savedState) == FFSStatus::OK
+            && !savedState.empty()) {
+            std::string restoreError;
+            if (!processSlots.restore(std::string(savedState.begin(), savedState.end()), restoreError))
+                Serial.printf("[PMACHINE] Invalid saved process slots: %s\n", restoreError.c_str());
+        }
+    }
     std::string storageError;
     if (!serviceHost.reserveExecutionStorage(storageError)) {
         Serial.printf("[PMACHINE] Execution storage unavailable: %s\n", storageError.c_str());
@@ -4615,7 +4997,14 @@ void registerPMachineRoutes(
             }
         }
     }
+    };
     server.on("/pmachine/service_host/install", HTTP_POST, [ffs](AsyncWebServerRequest* request) {
+#if defined(PULSE_NETWORK_BOOTSTRAP)
+        if (!slotStorageReady) {
+            request->send(503, "text/plain", "Hosted installation is waiting for SD or remote FFS paging");
+            return;
+        }
+#endif
         String serviceFile, serviceMap, daemonFile, daemonMap, collectorId, udpPort = "4210", daemonsJson;
         String ttl = "180000", heartbeat = "60000";
         String lifecycleJson, ownerAggregatorId, reportTargetJson, reportTargetsJson, bindingsJson;
@@ -4908,6 +5297,9 @@ void registerPMachineRoutes(
             hostedInstallBusy.store(false);
             request->send(503, "text/plain", "Cannot allocate hosted installation job"); return;
         }
+#if defined(PULSE_NETWORK_BOOTSTRAP)
+        pendingLoopHostedInstall.store(work);
+#else
         if (xTaskCreate([](void* context) {
                 auto* work = static_cast<std::function<void()>*>(context);
                 (*work)();
@@ -4920,22 +5312,20 @@ void registerPMachineRoutes(
             hostedInstallBusy.store(false);
             request->send(503, "text/plain", "Cannot start hosted installation worker"); return;
         }
+#endif
         request->send(response);
     });
     server.on("/pmachine/service_host/status", HTTP_GET, [](AsyncWebServerRequest* request) {
         String id;
         getRequestParam(request, "collectorId", id);
         auto status = serviceHost.status(id.c_str());
-        const int code = status.find("\"busy\":true") != std::string::npos
-            || status.find("\"unavailable\":true") != std::string::npos ? 503
-            : status.find("\"error\":\"Hosted service not found\"") != std::string::npos ? 404 : 200;
         PULSE_ASYNC_TRACE("Hosted status response code=%d bytes=%u heap=%u",
-            code, static_cast<unsigned>(status.size()), ESP.getFreeHeap());
+            status.code, static_cast<unsigned>(std::strlen(status.data())), ESP.getFreeHeap());
         pmachine::HostedStatusResponse* response = nullptr;
         try {
-            response = new pmachine::HostedStatusResponse(code, std::move(status));
+            response = new pmachine::HostedStatusResponse(std::move(status));
         } catch (const std::bad_alloc&) {
-            Serial.println("[SERVICE-HOST] Status response chunk allocation failed");
+            // Header initialization can also allocate.
         }
         if (!response) {
             Serial.println("[SERVICE-HOST] Status response allocation failed");
@@ -4944,10 +5334,26 @@ void registerPMachineRoutes(
         }
         request->send(response);
     });
+    server.on("/pmachine/runtime/profile", HTTP_GET, [](AsyncWebServerRequest* request) {
+        const auto status = serviceHost.status();
+        JsonDocument statusDoc;
+        if (deserializeJson(statusDoc, status.data())
+            || !statusDoc["runtimeProfile"].is<JsonObjectConst>()) {
+            request->send(503, "application/json", "{\"error\":\"Runtime profile unavailable\"}");
+            return;
+        }
+        String profile;
+        serializeJson(statusDoc["runtimeProfile"], profile);
+        request->send(200, "application/json", profile);
+    });
     server.on("/pmachine/service_host/stop", HTTP_POST, [ffs](AsyncWebServerRequest* request) {
         std::string error;
         String id;
         getRequestParam(request, "collectorId", id);
+        if (managedSlotCount && (id.isEmpty() || id.startsWith("scheduler-slot-"))) {
+            request->send(409, "text/plain", "Unload scheduler-owned programs through the scheduler API");
+            return;
+        }
         if (!serviceHost.stop(error, id.c_str())) { request->send(503, "text/plain", error.c_str()); return; }
         bool released = false;
         if (!id.isEmpty()) {
@@ -6950,7 +7356,11 @@ void registerPMachineRoutes(
         allocationStage = "load-program";
         procedureSignatures.clear();
         text = String();
-        machine.loadProgram(std::move(binary), std::string(file.c_str()), programLimit);
+        if (!machine.loadProgram(std::move(binary), std::string(file.c_str()), programLimit,
+                                 !policy.hasResidentLoad)) {
+            request->send(507, "text/plain", machine.getProgramLoadError());
+            return;
+        }
 
         machine.clearRoutingDeliveries();
         String executionMessage = message;
@@ -7123,7 +7533,11 @@ void registerPMachineRoutes(
         }
 
         const size_t programLimit = max > 0 ? max : binary.size();
-        machine.loadProgram(std::move(binary), "payload://inline", programLimit);
+        if (!machine.loadProgram(std::move(binary), "payload://inline", programLimit,
+                                 !policy.hasResidentLoad)) {
+            request->send(507, "text/plain", machine.getProgramLoadError());
+            return;
+        }
 
         machine.clearRoutingDeliveries();
         machine.setRoutingContext(std::string(inputQueue.c_str()), std::string(message.c_str()));
@@ -7182,13 +7596,6 @@ void registerPMachineRoutes(
                 bool transferred = false;
                 ~ExecutionLease() { if (!transferred) inlineExecutionBusy.store(false); }
             } executionLease;
-#if defined(ESP32)
-            if (!ensureInlineExecutionWorker()) {
-                request->send(503, "application/json", "{\"error\":\"Unable to start execution worker\"}");
-                return;
-            }
-#endif
-
             String pcode = bodyDoc["pcode"].as<String>();
             if (pcode.length() == 0) {
                 request->send(400, "application/json", "{\"error\":\"pcode is required\"}");
@@ -7314,7 +7721,11 @@ void registerPMachineRoutes(
             }
 
             const size_t programLimit = max > 0 ? max : binary.size();
-            machine.loadProgram(std::move(binary), "payload://json", programLimit);
+            if (!machine.loadProgram(std::move(binary), "payload://json", programLimit,
+                                     !policy.hasResidentLoad)) {
+                request->send(507, "application/json", "{\"error\":\"Unable to allocate managed program image\"}");
+                return;
+            }
             machine.clearRoutingDeliveries();
             machine.setRoutingContext(std::string(inputQueue.c_str()), std::string(message.c_str()));
             bodyDoc.clear();
@@ -7373,7 +7784,6 @@ void registerPMachineRoutes(
 
             response->complete = response->finish(out);
             response->ready.store(true);
-            inlineExecutionBusy.store(false);
             });
             if (!work) {
                 request->send(503, "application/json", "{\"error\":\"Unable to allocate execution worker\"}");
@@ -7386,7 +7796,15 @@ void registerPMachineRoutes(
                 return;
             }
 #if defined(ESP32)
-            if (xQueueSend(inlineExecutionQueue, &work, 0) != pdTRUE) {
+            if (xTaskCreate([](void* context) {
+                    auto* work = static_cast<std::function<void()>*>(context);
+                    esp_task_wdt_add(nullptr);
+                    (*work)();
+                    delete work;
+                    esp_task_wdt_delete(nullptr);
+                    inlineExecutionBusy.store(false);
+                    vTaskDelete(nullptr);
+                }, "inline_pmachine", 16384, work, 1, nullptr) != pdPASS) {
                 delete work;
                 delete httpResponse;
                 request->send(503, "application/json", "{\"error\":\"Unable to start execution worker\"}");
@@ -7395,6 +7813,7 @@ void registerPMachineRoutes(
 #else
             (*work)();
             delete work;
+            inlineExecutionBusy.store(false);
 #endif
             executionLease.transferred = true;
             request->send(httpResponse);

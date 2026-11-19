@@ -1,7 +1,4 @@
-import net from 'node:net';
-import fs from 'node:fs/promises';
-import { compileKotlinToPcode } from '../src/compile-kotlin-to-pcode.mjs';
-import { applyCacheSchemas } from '../src/cache-schema.mjs';
+import { compileTapoCollector } from '../src/tapo-artifacts.mjs';
 import { compactServiceHostProgramMap } from '../../../virtualMachines/esp32/pmachines/shared/contracts/service-host-bindings.mjs';
 import { encodeHostedImage } from '../../../virtualMachines/esp32/pmachines/shared/contracts/hosted-image.mjs';
 import { attachPcodeSignature } from '../../../virtualMachines/esp32/aggregator/scripts/pcode-signing.mjs';
@@ -12,39 +9,36 @@ const target = origin && new URL(origin);
 if (!target || target.protocol !== 'http:' || target.username || target.password ||
     target.pathname !== '/' || target.search || target.hash ||
     !/^(?:[1-9]|1[0-5])$/.test(slot) || extra.length) {
-  throw new Error('Usage: node install-tapo-camera-daemon.mjs http://ESP32-IP [service-slot 1..15]');
+  throw new Error('Usage: node install-tapo-camera-daemon.mjs http://ESP32-IP [scheduler-slot 1..15]');
 }
 const name = 'tapo-camera-discovery';
-const collectorId = `bundle-${name}`;
+const manifestPath = `/pmachine/programs/${name}/manifest.json`;
 
 async function request(path, options = {}) {
-  const response = await requestEsp32(new URL(path, target), { timeoutMs: 120000, ...options });
-  const text = await response.text();
-  if (!response.ok) throw new Error(`${path}: HTTP ${response.status}: ${text}`);
-  return text ? JSON.parse(text) : {};
+  for (let attempt = 0; ; attempt++) {
+    const response = await requestEsp32(new URL(path, target), { timeoutMs: 120000, ...options });
+    const text = await response.text();
+    if (response.ok) return text ? JSON.parse(text) : {};
+    if (attempt < 5 && ((response.status === 503 && text === 'Service host busy') ||
+        (response.status === 409 && text.includes('"error":"Service host busy or unavailable"')))) {
+      await new Promise(resolve => setTimeout(resolve, 300 + 113 * attempt));
+      continue;
+    }
+    throw new Error(`${path}: HTTP ${response.status}: ${text}`);
+  }
 }
 
-const inventory = await request('/api/pmachine/programs');
-if (inventory.programs.some(program => program.name === name))
-  throw new Error(`${name} already exists; refusing to overwrite it`);
-const slots = await request('/pmachine/process-slots');
-const slotName = `service-${slot.padStart(2, '0')}`;
-if (!slots.slots.some(item => item.slot === slotName && item.occupied === false))
-  throw new Error(`${slotName} is unavailable; refusing to replace an existing process`);
-
-const daemonSource = await fs.readFile(new URL('../examples/tapo-camera-discovery-daemon.kt', import.meta.url), 'utf8');
-const serviceSource = await fs.readFile(new URL('../examples/tapo-camera-service.kt', import.meta.url), 'utf8');
-const daemon = compileKotlinToPcode(daemonSource, {
-  fileName: 'tapo-camera-discovery-daemon.kt', target: 'esp32',
-  daemonId: 'tapo-camera-collector', daemonRefreshMs: 180000
-});
-const service = compileKotlinToPcode(serviceSource, {
-  fileName: 'tapo-camera-service.kt', target: 'esp32', serviceId: 'tapo-camera-service'
-});
-const schemas = [{ name: 'cameras', capacity: 50, fields: ['name', 'protocol', 'address', 'port', 'serviceUrl', 'deviceType']
-  .map(field => ({ name: field, type: 'string' })) }];
-applyCacheSchemas(daemon, schemas);
-applyCacheSchemas(service, schemas);
+const { slots } = await request('/api/pmachine/scheduler');
+const selected = slots.find(item => item.slot === Number(slot));
+if (selected?.state === 'running' && selected.manifestPath === manifestPath) {
+  console.log(`${name} is already running in scheduler slot ${slot}.`);
+  process.exit(0);
+}
+if (selected?.state !== 'empty' || slots.some(item => item.manifestPath === manifestPath))
+  throw new Error(`${name} or scheduler slot ${slot} is already in use`);
+const { programs } = await request('/api/pmachine/programs');
+const installed = programs.find(program => program.name === name);
+if (installed?.running) throw new Error(`${name} is running outside the scheduler`);
 
 function artifact(unit, prefix) {
   const image = encodeHostedImage(unit.pcodeText);
@@ -61,12 +55,14 @@ const manifest = {
   name, version: '1', type: 'daemon', serviceIndex: Number(slot), entry: 'd.phi', programMap: 'd.json',
   serviceEntry: 's.phi', serviceProgramMap: 's.json', udpPort: 0, networkPeers: []
 };
-await request('/api/pmachine/programs', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ name, manifest, files: [...artifact(daemon, 'd'), ...artifact(service, 's')] })
+const post = (path, body) => request(path, {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
 });
-const started = await request(`/api/pmachine/programs/${name}/start`, { method: 'POST' });
-if (started.collectorId !== collectorId || started.status !== 'running')
+if (!installed) {
+  const { daemon, service } = await compileTapoCollector('esp32');
+  await post('/api/pmachine/programs', { name, manifest, files: [...artifact(daemon, 'd'), ...artifact(service, 's')] });
+}
+const started = await post('/api/pmachine/scheduler/load', { manifestPath, slot: Number(slot) });
+if (started.slot !== Number(slot) || started.manifestPath !== manifestPath || started.state !== 'running')
   throw new Error(`Unexpected daemon start result: ${JSON.stringify(started)}`);
-console.log(`Installed ${collectorId} in ${slotName}; configure the federation source as ${target.origin}.`);
+console.log(`Installed scheduler-slot-${slot}; ONVIF snapshot at ${target.origin}/api/cameras/snapshot.`);

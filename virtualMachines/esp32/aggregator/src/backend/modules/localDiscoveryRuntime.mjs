@@ -84,7 +84,12 @@ export function createLocalDiscoveryRuntime({
       }
     };
     if (beacon) {
-      node.availability = { available: Boolean(data.available), draining: Boolean(data.draining), status: data.status || (data.available ? 'available' : 'unavailable') };
+      const status = String(data.status || '').trim();
+      const available = typeof data.available === 'boolean'
+        ? data.available
+        : status.toLowerCase() === 'here';
+      const draining = typeof data.draining === 'boolean' ? data.draining : false;
+      node.availability = { available, draining, status: status || (available ? 'available' : 'unavailable') };
       node.beacon = { kind: data.kind, seenAt: now, capabilityHash: data.capabilityHash, capabilitiesChanged, needsDetails: Boolean(data.needsDetails), ackRequired: Boolean(data.ackRequired) };
       reply({ kind: 'nodeBeaconAck', nodeId, httpPort, capabilityHash: getAnnouncement().capabilityHash, requestDetails: Boolean(capabilitiesChanged || data.needsDetails), ackedAt: now });
       if (capabilitiesChanged || data.needsDetails) {

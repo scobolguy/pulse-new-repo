@@ -542,12 +542,36 @@ Edit `config\federated-device-cache.json`. Empty `lanInterface` detects a unique
 active IPv4 interface on the ESP32 subnet; set it explicitly if ambiguous.
 The default collectors are `kasa-edge`, `tuya-js` and `ssdp-js`. An optional
 `sources` array overrides central membership with objects containing
-`collectorId`, `protocol` (`kasa`, `tuya`, `ssdp`) and a private IPv4 HTTP
+`collectorId`, `protocol` (`kasa`, `tuya`, `ssdp`, `pulse`, `onvif`) and a private IPv4 HTTP
 `origin`. It may include multiple independently configured same-protocol
-collectors, up to eight. IDs and normalized origins must both be unique; neither
+collectors, up to nine. IDs and normalized origins must both be unique; neither
 an announcement nor a claimed response identity can create an extra voter.
 Configured origins are trusted LAN endpoints, **not cryptographically
 authenticated identities**.
+
+The ONVIF source reads `/api/cameras/snapshot` from Camera's Pulse Kotlin
+collector in scheduler slot 8. The advertised device-service URL is inventory
+metadata only; the federation does not connect to it. Install that collector
+with `node languages\kotlin\scripts\install-tapo-camera-daemon.mjs http://192.168.2.83 8`
+from the repository root.
+On ESP32, an ONVIF scan defers until its next scheduled run if Wi-Fi is down,
+free internal RAM is below 24 KiB, or the largest free internal block is below
+8 KiB. A deferral or probe-send failure is visible in collector health and
+does not replace cached observations with an empty result.
+The ONVIF socket sends from an ephemeral port on the Wi-Fi interface and
+accepts replies up to 4096 bytes using the host's existing receive workspace.
+The serial log distinguishes received, oversized, and matched replies.
+The Tapo C200 has been observed returning a 2654-byte IPv4 UDP payload, which
+requires fragment reassembly on a 1500-byte network. The stock Arduino 2.x
+ESP32-S3 SDK used by Camera does not enable `CONFIG_LWIP_IP4_REASSEMBLY`.
+Receiving these replies requires an SDK built with IPv4 reassembly enabled;
+changing a firmware compile flag does not rebuild the precompiled lwIP library.
+The Camera test build used a separate lwIP archive from the Arduino 2.0.17
+SDK's matching ESP-IDF v4.4.7 sources. It kept the ESP32-S3 `qio_opi`
+configuration and lwIP's existing reassembly limits (10 queued pbufs and
+a 3-second timeout). Confirm `ip4_reass` and `ip_reass_tmr` in the link map
+before deploying a replacement image: the stock PlatformIO build does not
+include this archive.
 
 ```text
 node testing\pmachines\install-esp32-kasa-cache.mjs --report <proof-path>

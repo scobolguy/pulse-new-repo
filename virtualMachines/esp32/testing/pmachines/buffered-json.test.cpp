@@ -14,7 +14,6 @@ void operator delete(void* pointer) noexcept { std::free(pointer); }
 void operator delete(void* pointer, size_t) noexcept { std::free(pointer); }
 
 int main() {
-    char buffer[1024];
     std::string output;
     output.reserve(20480);
     JsonDocument doc;
@@ -25,7 +24,7 @@ int main() {
         const size_t expected = measureJson(doc);
         const size_t before = allocations;
         for (int run = 0; run < 100; ++run) {
-            assert(pmachine::serializeBufferedJson(doc, expected, buffer, output) == expected);
+            assert(pmachine::serializeBufferedJson(doc, expected, output) == expected);
             assert(output.size() == length + 2);
             assert(output.front() == '"' && output.back() == '"');
             assert(output.compare(1, length, text) == 0);
@@ -34,12 +33,12 @@ int main() {
     }
     doc.set("quotes: \" slash: \\ newline:\n");
     const size_t expected = measureJson(doc);
-    assert(pmachine::serializeBufferedJson(doc, expected, buffer, output) == expected);
+    assert(pmachine::serializeBufferedJson(doc, expected, output) == expected);
     JsonDocument roundTrip;
     assert(!deserializeJson(roundTrip, output));
     assert(roundTrip.as<std::string>() == doc.as<std::string>());
     doc.set(nullptr);
-    assert(pmachine::serializeBufferedJson(doc, measureJson(doc), buffer, output) == 4);
+    assert(pmachine::serializeBufferedJson(doc, measureJson(doc), output) == 4);
     assert(output == "null");
 
     pmachine::HostExecutionStorage execution;
@@ -49,7 +48,7 @@ int main() {
     request["localAddress"] = "192.168.2.63";
     const size_t requestBytes = measureJson(request);
     std::string body;
-    assert(pmachine::serializeBufferedJson(request, requestBytes, buffer, body) == requestBytes);
+    assert(pmachine::serializeBufferedJson(request, requestBytes, body) == requestBytes);
     request.clear();
     assert(request.isNull());
     assert(!deserializeJson(request, body));
@@ -60,7 +59,7 @@ int main() {
     const size_t packetBytes = measureJson(response["packet"]);
     auto& packet = execution.calls.result.text;
     const size_t before = allocations;
-    assert(pmachine::serializeBufferedJson(response["packet"], packetBytes, buffer, packet) == packetBytes);
+    assert(pmachine::serializeBufferedJson(response["packet"], packetBytes, packet) == packetBytes);
     response.clear();
     assert(packet == "{\"nodeId\":\"esp32-vm-2bf4\",\"kind\":\"nodeBeacon\"}");
     assert(allocations == before);

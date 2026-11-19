@@ -195,7 +195,20 @@ test('one native-target service artifact has matching Node and native HTTP behav
     const status = await jsonRequest(native.origin, '/pmachine/service_host/status');
     assert.equal(status.body.serviceId, 'native-parity');
     assert.equal(status.body.capabilities.runtime, 'native');
-    assert.deepEqual(status.body.capabilities.supported, []);
+    assert.deepEqual(status.body.capabilities.supported, ['xml.stream']);
+    assert.equal(status.body.hostBindingsVersion, 1);
+    assert.equal(status.body.hostCapabilitiesVersion, 1);
+    assert.equal(status.body.runtimeProfile.target, 'native');
+    assert.ok(status.body.runtimeProfile.supportedHostCapabilities.includes('xml.stream'));
+    const nativeProfile = await jsonRequest(native.origin, '/pmachine/runtime/profile');
+    assert.deepEqual(nativeProfile.body, status.body.runtimeProfile);
+    const javascriptProfile = jsHost.getStatus().runtimeProfile;
+    assert.equal(javascriptProfile.target, 'js');
+    assert.ok(javascriptProfile.supportedHostCapabilities.includes('xml.stream'));
+    assert.deepEqual(
+      (await jsonRequest(jsOrigin, '/pmachine/runtime/profile')).body,
+      javascriptProfile
+    );
 
     let sourceAvailable = true;
     let resolutions = 0;
@@ -419,7 +432,7 @@ test('one native-target service artifact has matching Node and native HTTP behav
     }
     const fsStatus = await jsonRequest(nativeFilesystem.origin, '/pmachine/service_host/status');
     assert.equal(fsStatus.body.capabilities.filesystem, true);
-    assert.deepEqual(fsStatus.body.capabilities.supported, ['filesystem.read', 'filesystem.write']);
+    assert.deepEqual(fsStatus.body.capabilities.supported, ['filesystem.read', 'filesystem.write', 'xml.stream']);
     const blockedPath = await fetch(`${nativeFilesystem.origin}/read-input`, {
       method: 'POST',
       headers: { 'content-type': 'text/plain' },

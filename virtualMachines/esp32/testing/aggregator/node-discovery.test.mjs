@@ -1,11 +1,34 @@
 import assert from 'node:assert/strict';
 import dgram from 'node:dgram';
+import { EventEmitter } from 'node:events';
 import { test } from 'node:test';
+import { createLocalDiscoveryRuntime } from '../../aggregator/src/backend/modules/localDiscoveryRuntime.mjs';
 import { bindNodeDiscoverySocket, enrichDiscoveredNode } from '../../aggregator/src/backend/modules/nodeDiscovery.mjs';
 import { DISCOVERY_NODE_MAX_AGE_MS, isFreshDiscoveryNode, pruneDiscoveryNodes } from '../../aggregator/src/discovery-topology.mjs';
 
 const ip = '192.0.2.115';
 const response = (payload) => ({ ok: true, json: async () => payload });
+
+class FakeSocket extends EventEmitter {
+  constructor(port) {
+    super();
+    this.port = port;
+    this.sent = [];
+  }
+
+  bind(port, callback) {
+    this.port = port || 43210;
+    callback();
+  }
+
+  address() { return { port: this.port }; }
+  setBroadcast() {}
+  send(message, port, host, callback) {
+    this.sent.push({ payload: JSON.parse(message.toString()), port, host });
+    callback(null);
+  }
+  close(callback) { callback?.(); }
+}
 
 test('discovery drops nodes exactly three minutes after the last announcement', () => {
   assert.equal(DISCOVERY_NODE_MAX_AGE_MS, 180_000);
@@ -25,6 +48,58 @@ test('discovery drops nodes exactly three minutes after the last announcement', 
   nodes.set('boundary', { lastSeen: now });
   pruneDiscoveryNodes(nodes, now, { log() {} });
   assert.equal(nodes.has('boundary'), true, 'A new announcement restores an expired node');
+});
+
+test('compact legacy beacons retain presence and request details on demand', async () => {
+  const discoveredNodes = new Map();
+  const sockets = [];
+  const runtime = createLocalDiscoveryRuntime({
+    discoveredNodes,
+    nodeId: 'test-aggregator',
+    getAnnouncement: () => ({ capabilityHash: 'aggregator-hash' }),
+    createSocket: () => {
+      const socket = new FakeSocket(0);
+      sockets.push(socket);
+      return socket;
+    },
+    fetchImpl: async () => response({ services: ['pmachine'] }),
+    logger: { log() {}, warn() {}, error() {} },
+  });
+
+  await runtime.start();
+  try {
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      kind: 'nodeBeacon',
+      nodeId: 'legacy-board',
+      nodeName: 'camera',
+      status: 'here',
+      capabilityHash: 'board-hash',
+      needsDetails: true,
+    })), { address: ip, port: 4210 });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(discoveredNodes.get(ip).availability, {
+      available: true, draining: false, status: 'here'
+    });
+    assert.deepEqual(sockets[1].sent.map((message) => message.payload.kind), [
+      'nodeBeaconAck', 'nodeDetailsRequest'
+    ]);
+
+    const unavailableIp = '192.0.2.116';
+    sockets[0].emit('message', Buffer.from(JSON.stringify({
+      kind: 'nodeBeacon',
+      nodeId: 'unavailable-board',
+      status: 'here',
+      available: false,
+      draining: true,
+    })), { address: unavailableIp, port: 4210 });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(discoveredNodes.get(unavailableIp).availability, {
+      available: false, draining: true, status: 'here'
+    });
+  } finally {
+    await runtime.stop();
+  }
 });
 
 test('status capabilities become visible while service description is still pending', async () => {

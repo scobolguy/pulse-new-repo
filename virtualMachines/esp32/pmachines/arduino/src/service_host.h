@@ -94,7 +94,13 @@ public:
                                       const std::string& transactionId = "",
                                       const std::string& ingressAggregatorId = "",
                                       const std::string& headers = "{}");
-    std::string status(const std::string& id = "");
+    struct Status {
+        int code;
+        const char* message;
+        std::unique_ptr<char, decltype(&std::free)> body{nullptr, &std::free};
+        const char* data() const { return body ? body.get() : message; }
+    };
+    Status status(const std::string& id = "");
     bool runningCollectorIds(std::vector<std::string>& ids);
     void diagnostics(JsonObject doc);
     std::string readiness(const std::string& id = "");
@@ -129,6 +135,7 @@ private:
     class FfsSwapFile {
     public:
         explicit FfsSwapFile(FederatedFileSystem& fileSystem) : ffs(fileSystem) {}
+        ~FfsSwapFile();
         bool writeAt(size_t offset, const uint8_t* data, size_t size);
         bool readAt(size_t offset, uint8_t* data, size_t size);
         const char* name() const { return "ffs"; }
@@ -136,14 +143,21 @@ private:
         bool open();
         FederatedFileSystem& ffs;
         File file;
+        char path[64]{};
     };
     void configureStringSwap(FederatedFileSystem* ffs);
     PMachine machine;
     HostExecutionStorage executionStorage;
     std::unique_ptr<FfsSwapFile> stringSwapFile;
     std::unique_ptr<ManagedHeapBacking> stringSwap;
-    char jsonOutputBuffer[1024];
-    ReusableJsonAllocator<4096> jsonAllocator;
+    class BulkJsonAllocator final : public ArduinoJson::Allocator {
+    public:
+        void* allocate(size_t size) override;
+        void deallocate(void* pointer) override;
+        void* reallocate(void* pointer, size_t size) override;
+    };
+    BulkJsonAllocator bulkJsonAllocator;
+    ReusableJsonAllocator<4096> jsonAllocator{&bulkJsonAllocator, &bulkJsonAllocator};
     NetworkBindings network;
     SemaphoreHandle_t mutex = nullptr;
     SemaphoreHandle_t ingressMutex = nullptr;
@@ -151,6 +165,14 @@ private:
     std::array<std::shared_ptr<HttpEvent>, HTTP_EVENT_LIMIT> httpEvents;
     uint64_t nextHttpOrder = 0;
     TaskHandle_t task = nullptr;
+#if defined(PULSE_NETWORK_BOOTSTRAP)
+public:
+    void bindLoopTask() { loopTask.store(xTaskGetCurrentTaskHandle()); }
+    void pollOnLoop();
+private:
+    std::atomic<TaskHandle_t> loopTask{nullptr};
+    unsigned long nextLoopTurn = 0;
+#endif
     TaskHandle_t reportTask = nullptr;
     std::atomic<bool> active{false};
     uint64_t observedAt = 0;
@@ -178,9 +200,22 @@ public:
         uint32_t timerRuns = 0, udpEvents = 0, failures = 0, droppedDatagrams = 0, shedDatagrams = 0;
         std::string lastError;
     };
+    template <class T>
+    struct ContextAllocator {
+        using value_type = T;
+        ContextAllocator() = default;
+        template <class U> ContextAllocator(const ContextAllocator<U>&) {}
+        T* allocate(size_t count) {
+            if (count > SIZE_MAX / sizeof(T)) throw std::bad_alloc();
+            return static_cast<T*>(allocateContextBytes(count * sizeof(T)));
+        }
+        void deallocate(T* pointer, size_t) { std::free(pointer); }
+        template <class U> bool operator==(const ContextAllocator<U>&) const { return true; }
+        template <class U> bool operator!=(const ContextAllocator<U>&) const { return false; }
+    };
     struct Context {
         Unit service;
-        std::vector<Daemon> daemons;
+        std::vector<Daemon, ContextAllocator<Daemon>> daemons;
         size_t daemonCount = 0, nextSource = 0;
         std::map<std::string, Table> tables;
         std::unique_ptr<HostCacheStore> caches{new LocalHostCacheStore()};
@@ -198,6 +233,7 @@ public:
         bool installed = true;
     };
 private:
+    static void* allocateContextBytes(size_t bytes);
     static constexpr size_t SERVICE_LIMIT = 17;
     std::array<std::shared_ptr<Context>, SERVICE_LIMIT> services;
     std::shared_ptr<Context> current;
@@ -219,6 +255,7 @@ private:
     SerializeResult serialize(const JsonDocument&, std::string&);
     SerializeResult serializeValue(JsonVariantConst, bool overflowed, std::string&);
     static void worker(void* context);
+    bool workerTurn();
     static void reporter(void* context);
     static bool call(const std::string&, const std::vector<HostValue>&, HostValue&, std::string&, void*);
     bool invoke(const std::string&, const std::vector<HostValue>&, HostValue&, std::string&);

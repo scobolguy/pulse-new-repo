@@ -80,23 +80,18 @@ private:
 
 class HostedStatusResponse : public HostedBoundedResponse {
 public:
-    HostedStatusResponse(int code, std::string body) {
-        _code = code;
+    explicit HostedStatusResponse(ServiceHost::Status status) : status(std::move(status)) {
+        _code = this->status.code;
         _contentType = "application/json";
-        _contentLength = body.size();
-        chunks.reserve((_contentLength + 255) / 256);
-        for (size_t position = 0; position < _contentLength; position += 256)
-            chunks.emplace_back(body, position, std::min(size_t(256), _contentLength - position));
+        _contentLength = std::strlen(this->status.data());
     }
 protected:
     const char* contentAt(size_t position, size_t& available) const override {
-        const auto& chunk = chunks[position / 256];
-        const size_t within = position % 256;
-        available = chunk.size() - within;
-        return chunk.data() + within;
+        available = _contentLength - position;
+        return status.data() + position;
     }
 private:
-    std::vector<std::string> chunks;
+    ServiceHost::Status status;
 };
 
 // Poll completion only on the web-server task. The worker never retains a

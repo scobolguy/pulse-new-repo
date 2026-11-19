@@ -1079,7 +1079,7 @@ function assignVar(frame, name, value) {
   frame.vars[name] = value;
 }
 
-async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queueTypesByName = new Map(), isoTypeIds = new Set(), inputQueue, sourceMessage, runtimeContext = {}, debugHooks = {} }) {
+async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queueTypesByName = new Map(), isoTypeIds = new Set(), inputQueue, sourceMessage, runtimeContext = {}, debugHooks = {}, imageInvocation = null }) {
   if (runtimeContext.onStdoutLine !== undefined && typeof runtimeContext.onStdoutLine !== 'function') {
     throw new TypeError('onStdoutLine must be a function');
   }
@@ -1111,6 +1111,7 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
       typeof pc !== 'number') {
     throw new Error(`P-code entry label not found: ${startLabel}`);
   }
+  if (imageInvocation) pc = imageInvocation.entry;
   let currentMessage = sourceMessage;
   // Run-local output document for the pcode-routine mapper. SRC_GET reads from
   // currentMessage; OUT_SET writes here; ROUTE_MAP_RUN commits it back.
@@ -1142,7 +1143,8 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
   const proceduresByLabel = mappingsById?.__proceduresByLabel || {};
   const enumTypes = mappingsById?.__enums || {};
   const globalFrame = {
-    vars: storage(invocationScope, Object.fromEntries([...extendableNames, ...programGlobals].map(name => [name, 0]))),
+    vars: storage(invocationScope, imageInvocation?.globals
+      ?? Object.fromEntries([...extendableNames, ...programGlobals].map(name => [name, 0]))),
     parent: null,
     memoryScope: invocationScope,
   };
@@ -1152,6 +1154,12 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
     globalFrame.vars['src'] = String(sourceMessage);
   }
   let currentFrame = globalFrame;
+  if (imageInvocation) {
+    currentFrame = {
+      vars: Object.fromEntries(imageInvocation.params.map((name, i) => [name, imageInvocation.args[i]])),
+      parent: globalFrame, memoryScope: invocationScope,
+    };
+  }
   const callStack = [];
   const exceptionHandlers = [];
   const pendingOrchTasks = [];
@@ -2536,7 +2544,12 @@ async function executeProgramImpl({ instructions, opcodeMap, mappingsById, queue
   if (currentLine.length > 0) {
     emitStdout(currentLine);
   }
+  if (imageInvocation && !stepLimitHit && imageInvocation.returnsValue && stack.length !== 1)
+    throw new Error('Image return stack mismatch');
+  if (imageInvocation && !stepLimitHit && !imageInvocation.returnsValue && stack.length !== 0)
+    throw new Error('Image return stack mismatch');
   return { deliveries, state, stdout, globals: exportGlobals(globalFrame.vars, records, sets), stepCount: steps, stepLimitHit, orchestration: state.__orchestration || null, response: state.__response ?? null, error: state.__orch_error || null,
+    ...(imageInvocation ? { imageResult: stack[0] } : {}),
     managedObjects: objects.stats,
     ...(memory ? { memory: memory.diagnostics() } : {}) };
   } finally {
