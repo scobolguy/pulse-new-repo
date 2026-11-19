@@ -12,9 +12,10 @@ draining. Each entry shows its address and runtime. It uses the configured
 `pulse-pmachine.backendUrl` Aggregator's `/api/pmachine/nodes` inventory, rather
 than treating every network device as an execution target.
 
-The list refreshes every 15 seconds while visible, when reopened, and through
-the section's refresh button (**Pulse Swarm: Refresh**). Discovery errors appear
-in the section and the **Pulse PMachine** output channel. This is a node
+The extension checks for changes every 15 seconds while visible, when reopened,
+and through **Pulse Swarm: Refresh**. Unchanged nodes are not redrawn. Failed
+checks keep the last successful list and report the error in the
+**Pulse PMachine** output channel. This is a node
 inventory, not a guarantee that every listed runtime supports every language
 artifact; existing Run/Debug target capability checks still apply.
 

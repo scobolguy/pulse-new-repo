@@ -463,16 +463,17 @@ test('Data Librarian surfaces catalog errors, empty catalogs, and recovers on re
   }
 });
 
-test('Swarm sidebar renders available execution nodes, refreshes and exposes discovery failures', async () => {
+test('Swarm sidebar only updates changed nodes and keeps its last snapshot on discovery failure', async () => {
   const originalFetch = globalThis.fetch;
   const provider = globalThis.pulseTestSwarmProvider;
-  let refreshed = 0;
-  const listener = provider.onDidChangeTreeData(() => refreshed++);
+  const changes = [];
+  const listener = provider.onDidChangeTreeData(item => changes.push(item));
   try {
+    let address = '192.0.2.1';
     globalThis.fetch = async url => {
       assert.equal(url, 'http://127.0.0.1:4000/api/pmachine/nodes');
       return Response.json([
-        { nodeId: 'vm', nodeName: 'Worker', ip: '192.0.2.1', available: true, draining: false,
+        { nodeId: 'vm', nodeName: 'Worker', ip: address, lastSeen: Date.now(), available: true, draining: false,
           details: { runtime: 'js-pmachine', services: ['PMachine'] } },
         { nodeId: 'busy', ip: '192.0.2.2', available: true, draining: true, services: ['PMachine'] },
       ]);
@@ -484,14 +485,21 @@ test('Swarm sidebar renders available execution nodes, refreshes and exposes dis
     assert.equal(items[0].description, '192.0.2.1 / js-pmachine');
     assert.equal(items[0].collapsibleState, vscode.TreeItemCollapsibleState.None);
     assert.deepEqual(await provider.getChildren(items[0]), []);
-    vscode.registeredCommands.get('pulse-pmachine.refreshSwarm')();
-    assert.equal(refreshed, 1);
-    globalThis.fetch = async () => Response.json([]);
-    assert.equal((await provider.getChildren())[0].label, 'No available p-code nodes');
+    await vscode.registeredCommands.get('pulse-pmachine.refreshSwarm')();
+    assert.deepEqual(changes, [undefined]);
+    address = '192.0.2.3';
+    await provider.refresh();
+    assert.deepEqual(changes, [undefined, items[0]]);
+    assert.equal((await provider.getChildren())[0], items[0]);
+    assert.equal(items[0].description, '192.0.2.3 / js-pmachine');
     globalThis.fetch = async () => { throw new Error('Aggregator offline'); };
-    const failed = (await provider.getChildren())[0];
-    assert.equal(failed.label, 'Swarm unavailable - refresh to retry');
-    assert.match(failed.tooltip, /Aggregator offline/);
+    await provider.refresh();
+    assert.equal((await provider.getChildren())[0], items[0]);
+    assert.equal(changes.length, 2);
+    globalThis.fetch = async () => Response.json([]);
+    await provider.refresh();
+    assert.equal((await provider.getChildren())[0].label, 'No available p-code nodes');
+    assert.deepEqual(changes, [undefined, items[0], undefined]);
   } finally {
     listener.dispose();
     globalThis.fetch = originalFetch;

@@ -5,46 +5,68 @@ export class SwarmViewProvider implements vscode.TreeDataProvider<vscode.TreeIte
   private readonly changes = new vscode.EventEmitter<vscode.TreeItem | undefined>();
   readonly onDidChangeTreeData = this.changes.event;
   private rootItems: vscode.TreeItem[] | undefined;
-  private rootLoading = false;
+  private loading: Promise<void> | undefined;
+  private lastError: string | undefined;
 
   constructor(private readonly output: vscode.OutputChannel) {}
 
-  refresh(): void { this.rootItems = undefined; this.rootLoading = false; this.changes.fire(undefined); }
+  refresh(): Promise<void> {
+    return this.loading ??= this.updateRoot().finally(() => { this.loading = undefined; });
+  }
   dispose(): void { this.changes.dispose(); }
   getTreeItem(item: vscode.TreeItem): vscode.TreeItem { return item; }
 
   async getChildren(item?: vscode.TreeItem): Promise<vscode.TreeItem[]> {
     if (item) return [];
-    if (this.rootItems) return this.rootItems;
-    if (this.rootLoading) return [new vscode.TreeItem('Loading Swarm...')];
-    this.rootLoading = true;
-    void this.loadRoot().then(items => {
-      this.rootItems = items;
-      this.rootLoading = false;
-      this.changes.fire(undefined);
-    }, error => {
-      this.rootItems = [new vscode.TreeItem(`Swarm unavailable - ${error instanceof Error ? error.message : String(error)}`)];
-      this.rootLoading = false;
-      this.changes.fire(undefined);
-    });
-    return [new vscode.TreeItem('Loading Swarm...')];
+    if (!this.rootItems) await this.refresh();
+    return this.rootItems ?? [];
   }
 
-  private async loadRoot(): Promise<vscode.TreeItem[]> {
+  private async updateRoot(): Promise<void> {
     const base = vscode.workspace.getConfiguration('pulse-pmachine')
       .get<string>('backendUrl', 'http://127.0.0.1:4000').trim();
     try {
       const nodes = await loadSwarmNodes(base);
-      return nodes.length ? nodes.map(node => this.nodeItem(node))
-        : [new vscode.TreeItem('No available p-code nodes')];
+      this.lastError = undefined;
+      const previous = this.rootItems ?? [];
+      const changed: vscode.TreeItem[] = [];
+      const next = nodes.length ? nodes.map(node => {
+        const fresh = this.nodeItem(node);
+        const existing = previous.find(item => item.id === fresh.id);
+        if (!existing) return fresh;
+        if (existing.label !== fresh.label || existing.description !== fresh.description
+          || existing.tooltip !== fresh.tooltip) {
+          Object.assign(existing, fresh);
+          changed.push(existing);
+        }
+        return existing;
+      }) : [previous.find(item => item.id === 'swarm:empty-status') ?? this.emptyItem()];
+      this.rootItems = next;
+      if (next.length !== previous.length || next.some((item, index) => item !== previous[index])) {
+        this.changes.fire(undefined);
+      } else {
+        for (const item of changed) this.changes.fire(item);
+      }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
+      if (this.lastError === detail) return;
+      this.lastError = detail;
       this.output.appendLine(`Swarm discovery failed: ${detail}`);
-      const unavailable = new vscode.TreeItem('Swarm unavailable - refresh to retry');
-      unavailable.tooltip = detail;
-      unavailable.iconPath = new vscode.ThemeIcon('warning');
-      return [unavailable];
+      if (!this.rootItems || this.rootItems[0]?.contextValue === 'pulseSwarmUnavailable') {
+        const unavailable = new vscode.TreeItem('Swarm unavailable - refresh to retry');
+        unavailable.contextValue = 'pulseSwarmUnavailable';
+        unavailable.tooltip = detail;
+        unavailable.iconPath = new vscode.ThemeIcon('warning');
+        this.rootItems = [unavailable];
+        this.changes.fire(undefined);
+      }
     }
+  }
+
+  private emptyItem(): vscode.TreeItem {
+    const item = new vscode.TreeItem('No available p-code nodes');
+    item.id = 'swarm:empty-status';
+    return item;
   }
 
   private nodeItem(node: SwarmNode): vscode.TreeItem {
