@@ -743,8 +743,9 @@ bool ServiceHost::validateUnit(const JsonDocument& map, const char* kind, Unit& 
 }
 
 namespace {
-const size_t FFS_STRING_SWAP_BUDGET = 32768;
-const size_t PSRAM_STRING_SWAP_BUDGET = 262144;
+const size_t STRING_SWAP_BUDGET = 262144;
+const size_t FFS_STRING_SWAP_BUDGET = STRING_SWAP_BUDGET;
+const size_t PSRAM_STRING_SWAP_BUDGET = STRING_SWAP_BUDGET;
 void* psramAllocate(size_t size) { return heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT); }
 void psramFree(void* block) { heap_caps_free(block); }
 }
